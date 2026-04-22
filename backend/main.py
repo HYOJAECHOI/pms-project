@@ -4,7 +4,7 @@ from database import engine
 import models
 from routers import (
     users, projects, members, wbs, organizations, auth, reports,
-    project_files, project_comments,
+    project_files, project_comments, wbs_files,
 )
 from routers.auth import auth_middleware
 
@@ -37,6 +37,7 @@ app.include_router(auth.router)
 app.include_router(reports.router)
 app.include_router(project_files.router)
 app.include_router(project_comments.router)
+app.include_router(wbs_files.router)
 
 @app.get("/")
 def read_root():

@@ -126,6 +126,19 @@ class ProjectFile(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class WBSFile(Base):
+    __tablename__ = "wbs_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    filename = Column(String, nullable=False)
+    filepath = Column(String, nullable=False)
+    filesize = Column(BigInteger, nullable=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ProjectComment(Base):
     __tablename__ = "project_comments"
 

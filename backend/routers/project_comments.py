@@ -64,3 +64,29 @@ def list_comments(project_id: int, db: Session = Depends(get_db)):
         for u in db.query(models.User).filter(models.User.id.in_(user_ids)).all():
             user_map[u.id] = u.name
     return [_serialize(c, user_map) for c in comments]
+
+
+@router.delete("/projects/{project_id}/comments/{comment_id}")
+def delete_comment(
+    project_id: int,
+    comment_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    comment = (
+        db.query(models.ProjectComment)
+        .filter(
+            models.ProjectComment.id == comment_id,
+            models.ProjectComment.project_id == project_id,
+        )
+        .first()
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="댓글을 찾을 수 없어요.")
+    if comment.comment_type != "manual":
+        raise HTTPException(status_code=400, detail="자동 생성된 변경이력은 삭제할 수 없어요.")
+    if comment.user_id != user_id:
+        raise HTTPException(status_code=403, detail="본인의 댓글만 삭제할 수 있어요.")
+    db.delete(comment)
+    db.commit()
+    return {"message": "삭제됐어요."}

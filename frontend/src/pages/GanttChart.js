@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Layout, Typography, Button, Select, Card, Tag, message, Tooltip, Modal, Form, Input, InputNumber, DatePicker, Slider, Divider, Spin } from 'antd';
-import { ArrowLeftOutlined, DownloadOutlined, UploadOutlined, PlusOutlined, PlusSquareOutlined, MinusSquareOutlined, WarningOutlined } from '@ant-design/icons';
+import { Layout, Typography, Button, Select, Card, Tag, message, Tooltip, Modal, Form, Input, InputNumber, DatePicker, Slider, Divider, Spin, Popover, List, Badge, Empty } from 'antd';
+import { ArrowLeftOutlined, DownloadOutlined, UploadOutlined, PlusOutlined, PlusSquareOutlined, MinusSquareOutlined, WarningOutlined, PaperClipOutlined, DeleteOutlined, FileOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import api from '../api/axios';
@@ -28,6 +28,7 @@ const INIT_COLS = [
   { key: 'days', label: '일수', width: 40 },
   { key: 'actual_progress', label: '진척률', width: 55 },
   { key: 'status', label: '상태', width: 65 },
+  { key: 'deliverable_files', label: '산출물', width: 80 },
 ];
 
 const levelColors = { 1: '#722ed1', 2: '#1677ff', 3: '#13c2c2', 4: '#52c41a' };
@@ -55,6 +56,78 @@ export default function GanttChart() {
   const currentUserId = (() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}').id; } catch { return null; }
   })();
+
+  // WBS별 파일 맵 — 행 Popover 열릴 때 lazy 로드
+  const [wbsFileMap, setWbsFileMap] = useState({});     // { [wbs_id]: [file, ...] | undefined }
+  // 업로드 대상 WBS id (hidden file input의 currentTarget 역할)
+  const [uploadTargetWbsId, setUploadTargetWbsId] = useState(null);
+  const wbsFileInputRef = useRef(null);
+
+  const loadWbsFiles = async (wbsId) => {
+    try {
+      const res = await api.get(`/wbs/${wbsId}/files`);
+      setWbsFileMap((prev) => ({ ...prev, [wbsId]: res.data || [] }));
+    } catch {
+      setWbsFileMap((prev) => ({ ...prev, [wbsId]: [] }));
+    }
+  };
+
+  const uploadWbsFile = async (wbsId, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await api.post(`/wbs/${wbsId}/files`, fd, {
+        params: { uploaded_by: currentUserId },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      await loadWbsFiles(wbsId);
+      message.success('업로드 완료');
+    } catch {
+      message.error('업로드 실패');
+    }
+  };
+
+  const deleteWbsFile = async (wbsId, fileId) => {
+    try {
+      await api.delete(`/wbs/files/${fileId}`);
+      await loadWbsFiles(wbsId);
+      message.success('삭제됐어요');
+    } catch {
+      message.error('삭제에 실패했어요');
+    }
+  };
+
+  const downloadWbsFile = async (fileRecord) => {
+    try {
+      const res = await api.get(`/wbs/files/${fileRecord.id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileRecord.filename || 'download';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error('다운로드에 실패했어요');
+    }
+  };
+
+  const handleWbsFilePicked = (e) => {
+    const file = e.target.files?.[0];
+    if (file && uploadTargetWbsId != null) {
+      uploadWbsFile(uploadTargetWbsId, file);
+    }
+    // input 초기화 (같은 파일 다시 선택 가능하도록)
+    e.target.value = '';
+    setUploadTargetWbsId(null);
+  };
+
+  const triggerWbsFileUpload = (wbsId) => {
+    setUploadTargetWbsId(wbsId);
+    // state set 뒤에 바로 클릭하면 반영이 안 될 수 있어 micro-task에 밀어줌
+    setTimeout(() => wbsFileInputRef.current?.click(), 0);
+  };
 
   // 사업 시작일 범위 확장 확인
   const confirmExtendProjectStart = (wbsStart) => new Promise((resolve) => {
@@ -234,18 +307,45 @@ export default function GanttChart() {
     return Math.max(0, Math.min(p, 1));
   };
 
-  const calcActualStatus = (actualEnd, planEnd) => {
+  // DB 저장용 상태는 대기/진행중/완료 3가지만. 지연 여부는 getDisplayStatus에서만 계산.
+  const calcActualStatus = (actualEnd /* , planEnd */) => {
+    if (!actualEnd) return '진행중';
     const today = dayjs().format('YYYY-MM-DD');
-    if (!actualEnd) {
-      // 실적 종료일 미정 + 계획 종료일 지남 → 지연(진행중이지만 overdue)
-      if (planEnd && today > planEnd) return '지연';
-      return '진행중';
-    }
-    // 실적 종료일이 미래면 아직 진행중
     if (today < actualEnd) return '진행중';
-    // 과거 날짜면서 계획 초과 → 지연
-    if (planEnd && actualEnd > planEnd) return '지연';
     return '완료';
+  };
+
+  // 화면 표시용 상태 라벨·색상 계산 (DB 저장값은 건드리지 않음)
+  const getDisplayStatus = (item) => {
+    const { status, plan_end_date: planEnd, actual_end_date: actualEnd } = item || {};
+    const today = dayjs().format('YYYY-MM-DD');
+    const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
+
+    if (status === '대기') {
+      return { text: '대기', color: statusColors['대기'] };
+    }
+    if (status === '진행중') {
+      if (!actualEnd && planEnd && today > planEnd) {
+        return { text: `진행중 (${daysBetween(today, planEnd)}일 지연)`, color: '#ff4d4f' };
+      }
+      if (actualEnd && planEnd && actualEnd > planEnd) {
+        return { text: `진행중 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: '#ff4d4f' };
+      }
+      return { text: '진행중', color: statusColors['진행중'] };
+    }
+    if (status === '완료') {
+      if (!actualEnd || !planEnd) {
+        return { text: '완료', color: statusColors['완료'] };
+      }
+      if (actualEnd < planEnd) {
+        return { text: `완료 (${daysBetween(planEnd, actualEnd)}일 조기)`, color: '#52c41a' };
+      }
+      if (actualEnd > planEnd) {
+        return { text: `완료 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: '#fa8c16' };
+      }
+      return { text: '완료 (정시)', color: '#52c41a' };
+    }
+    return { text: status || '-', color: statusColors[status] || '#d9d9d9' };
   };
 
   const todayIndex = dateToIndex(dayjs().format('YYYY-MM-DD'));
@@ -374,6 +474,43 @@ const recomputeParentActualRange = async (childItem, latestItems) => {
   if (parent.parent_id) {
     const updatedItems = items.map(w => w.id === parent.id ? updatedParent : w);
     await recomputeParentActualRange(parent, updatedItems);
+  }
+};
+
+// 부모의 계획 범위를 자식들 기준으로 재계산 (합집합 의미)
+// - plan_start_date = min(자식들 plan_start_date)
+// - plan_end_date   = max(자식들 plan_end_date)
+// 조상 체인을 따라 재귀 갱신. latestItems를 받아 stale state 이슈 회피.
+const recomputeParentPlanRange = async (childItem, latestItems) => {
+  if (!childItem?.parent_id) return;
+  const items = latestItems || wbsItems;
+  const parent = items.find(w => w.id === childItem.parent_id);
+  if (!parent) return;
+
+  const siblings = items.filter(w => w.parent_id === parent.id);
+  const starts = siblings.map(s => s.plan_start_date).filter(Boolean);
+  const ends   = siblings.map(s => s.plan_end_date).filter(Boolean);
+  const newStart = starts.length ? starts.reduce((a, b) => (a < b ? a : b)) : null;
+  const newEnd   = ends.length   ? ends.reduce((a, b) => (a > b ? a : b))   : null;
+
+  // 변경 사항 없으면 skip
+  if (parent.plan_start_date === newStart && parent.plan_end_date === newEnd) return;
+
+  const params = new URLSearchParams();
+  if (newStart) params.append('plan_start_date', newStart);
+  if (newEnd)   params.append('plan_end_date',   newEnd);
+  await api.put(`/wbs/${parent.id}?${params.toString()}`);
+
+  const updatedParent = {
+    ...parent,
+    plan_start_date: newStart,
+    plan_end_date:   newEnd,
+  };
+  setWbsItems(prev => prev.map(w => w.id === parent.id ? updatedParent : w));
+
+  if (parent.parent_id) {
+    const updatedItems = items.map(w => w.id === parent.id ? updatedParent : w);
+    await recomputeParentPlanRange(parent, updatedItems);
   }
 };
 
@@ -637,6 +774,8 @@ if (field === 'wbs_number') {
       const planEnd = field === 'plan_end_date' ? value : item.plan_end_date;
       await checkAndExpandParent(item, planStart, planEnd);
       await checkProjectRangeOverflow({ planStart, planEnd });
+      const latestItems = await fetchAll();
+      await recomputeParentPlanRange({ ...item, plan_start_date: planStart, plan_end_date: planEnd }, latestItems);
     }
     if (field === 'actual_start_date' || field === 'actual_end_date') {
       const actualStart = field === 'actual_start_date' ? value : item.actual_start_date;
@@ -685,6 +824,8 @@ if (field === 'wbs_number') {
         planStart: currentItem.plan_start_date,
         planEnd: currentItem.plan_end_date,
       });
+      const latestItems = await fetchAll();
+      await recomputeParentPlanRange(currentItem, latestItems);
       message.success('일정 수정됐어요!');
       fetchAll();
     };
@@ -886,6 +1027,10 @@ const handleAdd = async (values) => {
   if (parent && mergedAssigneeIds.length > 0) {
     await propagateAssigneesUp({ parent_id: parent.id }, mergedAssigneeIds);
   }
+  if (parent) {
+    const latestItems = await fetchAll();
+    await recomputeParentPlanRange({ parent_id: parent.id }, latestItems);
+  }
   fetchAll(); setAddModalOpen(false); addForm.resetFields(); setParentForAdd(null); message.success('추가됐어요!');
 };
 
@@ -895,6 +1040,7 @@ const handleAdd = async (values) => {
     const latestItems = await fetchAll();
     if (target?.parent_id) {
       await recomputeParentActualRange(target, latestItems);
+      await recomputeParentPlanRange(target, latestItems);
       await fetchAll();
     }
     message.success('삭제됐어요!');
@@ -920,6 +1066,8 @@ const handleSetGanttDate = async (item, dateType, dateStr) => {
     const planEnd = dateType === 'plan_end_date' ? dateStr : item.plan_end_date;
     await checkAndExpandParent(item, planStart, planEnd);
     await checkProjectRangeOverflow({ planStart, planEnd });
+    const latestItems = await fetchAll();
+    await recomputeParentPlanRange({ ...item, plan_start_date: planStart, plan_end_date: planEnd }, latestItems);
   }
   if (dateType === 'actual_start_date' || dateType === 'actual_end_date') {
     const latestItems = await fetchAll();
@@ -1062,15 +1210,95 @@ if (col.key === 'wbs_number') return isEditing ? (
         onPressEnter={(e) => handleCellSave(item, 'actual_progress', parseFloat(e.target.value) || 0)} />
     ) : <span onClick={() => setEditingCell({ id: item.id, field: 'actual_progress' })} style={{ cursor: 'pointer', fontSize: 11, color: '#52c41a', width: '100%', display: 'block', textAlign: 'center' }}>{Math.round((item.actual_progress || 0) * 100)}%</span>;
 
-    if (col.key === 'status') return isEditing ? (
-      <Select size="small" defaultValue={item.status} autoFocus style={{ width: '100%' }}
-        onChange={(val) => handleCellSave(item, 'status', val)} onBlur={() => setEditingCell(null)}>
-        <Select.Option value="대기">대기</Select.Option>
-        <Select.Option value="진행중">진행중</Select.Option>
-        <Select.Option value="완료">완료</Select.Option>
-        <Select.Option value="지연">지연</Select.Option>
-      </Select>
-    ) : <Tag color={statusColors[item.status]} style={{ cursor: 'pointer', fontSize: 10, color: item.status === '지연' ? 'white' : undefined }} onClick={() => setEditingCell({ id: item.id, field: 'status' })}>{item.status}</Tag>;
+    if (col.key === 'status') {
+      if (isEditing) {
+        return (
+          <Select size="small" defaultValue={item.status} autoFocus style={{ width: '100%' }}
+            onChange={(val) => handleCellSave(item, 'status', val)} onBlur={() => setEditingCell(null)}>
+            <Select.Option value="대기">대기</Select.Option>
+            <Select.Option value="진행중">진행중</Select.Option>
+            <Select.Option value="완료">완료</Select.Option>
+          </Select>
+        );
+      }
+      const ds = getDisplayStatus(item);
+      return (
+        <Tag
+          color={ds.color}
+          style={{ cursor: 'pointer', fontSize: 10 }}
+          onClick={() => setEditingCell({ id: item.id, field: 'status' })}
+        >
+          {ds.text}
+        </Tag>
+      );
+    }
+
+    if (col.key === 'deliverable_files') {
+      const files = wbsFileMap[item.id];
+      const hasFiles = Array.isArray(files) && files.length > 0;
+      const count = Array.isArray(files) ? files.length : null;
+      const popoverContent = (
+        <div style={{ minWidth: 240, maxWidth: 320 }}>
+          {hasFiles ? (
+            <List
+              size="small"
+              dataSource={files}
+              renderItem={(f) => (
+                <List.Item
+                  style={{ padding: '6px 0' }}
+                  actions={[
+                    <Button
+                      key="del"
+                      size="small" type="text" danger
+                      icon={<DeleteOutlined />}
+                      onClick={() => deleteWbsFile(item.id, f.id)}
+                    />,
+                  ]}
+                >
+                  <a
+                    onClick={() => downloadWbsFile(f)}
+                    style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={f.filename}
+                  >
+                    <FileOutlined /> {f.filename}
+                  </a>
+                </List.Item>
+              )}
+            />
+          ) : Array.isArray(files) ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="파일 없음" style={{ margin: '8px 0' }} />
+          ) : (
+            <div style={{ fontSize: 12, color: '#888', textAlign: 'center', padding: 8 }}>로딩 중...</div>
+          )}
+          <Button
+            size="small" block icon={<UploadOutlined />}
+            style={{ marginTop: 8 }}
+            onClick={() => triggerWbsFileUpload(item.id)}
+          >
+            파일 업로드
+          </Button>
+        </div>
+      );
+      return (
+        <Popover
+          content={popoverContent}
+          title={`산출물 · ${item.wbs_number} ${item.title}`}
+          trigger="click"
+          placement="bottomRight"
+          onOpenChange={(open) => { if (open && files === undefined) loadWbsFiles(item.id); }}
+        >
+          <Button
+            type="text" size="small"
+            style={{ width: '100%', padding: 0, fontSize: 12 }}
+            icon={<PaperClipOutlined />}
+          >
+            {count == null ? '' : count === 0 ? '+' : (
+              <Badge count={count} size="small" style={{ backgroundColor: '#1677ff', marginLeft: 2 }} />
+            )}
+          </Button>
+        </Popover>
+      );
+    }
 
     return null;
   };
@@ -1106,7 +1334,6 @@ if (col.key === 'wbs_number') return isEditing ? (
             <Select.Option value="대기">대기</Select.Option>
             <Select.Option value="진행중">진행중</Select.Option>
             <Select.Option value="완료">완료</Select.Option>
-            <Select.Option value="지연">지연</Select.Option>
           </Select>
         </Form.Item>
       </div>
@@ -1163,7 +1390,7 @@ if (col.key === 'wbs_number') return isEditing ? (
 
 return (
   <div onClick={() => { setContextMenu(null); setGanttContextMenu(null); }} style={{ padding: '0' }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${id}`, { state: { tab: 'wbs', from: location.state?.from } })} style={{ marginBottom: 16 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${id}`, { state: { tab: 'wbs', from: location.state?.from, refresh: true } })} style={{ marginBottom: 16 }}>
           프로젝트로 돌아가기
         </Button>
 
@@ -1189,6 +1416,8 @@ return (
               <Button icon={<DownloadOutlined />} onClick={handleExcelDownload}>엑셀 다운</Button>
               <Button icon={<UploadOutlined />} onClick={() => fileInputRef.current.click()}>엑셀 업로드</Button>
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={handleExcelUpload} />
+              {/* WBS 산출물 파일 업로드용 hidden input */}
+              <input ref={wbsFileInputRef} type="file" style={{ display: 'none' }} onChange={handleWbsFilePicked} />
             </div>
           </div>
           <div style={{ marginTop: 8, display: 'flex', gap: 12, fontSize: 11, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1281,7 +1510,7 @@ return (
         aw = (endIdx - asRender + 1) * cellWidth;
       }
       const as = asRender;
-      const rowBg = item.status === '지연'
+      const rowBg = delay?.overdue
         ? '#fff1f0'
         : (item.level === 1 ? '#f9f0ff' : item.level === 2 ? '#f0f7ff' : 'white');
 
@@ -1309,28 +1538,38 @@ return (
             {todayIndex >= 0 && todayIndex < dates.length && (
               <div style={{ position: 'absolute', left: todayIndex * cellWidth + cellWidth / 2, top: 0, width: 2, height: ROW_HEIGHT, background: '#ff4d4f', zIndex: 10, opacity: 0.8, pointerEvents: 'none' }} />
             )}
-            {pw > 0 && (
-              <Tooltip title={`계획: ${item.plan_start_date} ~ ${item.plan_end_date} (${getDaysDiff(item.plan_start_date, item.plan_end_date)}일)${delay ? ' | ⚠ ' + delay.text : ''}`}>
-                <div style={{ position: 'absolute', left: ps * cellWidth, top: PLAN_BAR_TOP, height: PLAN_BAR_H, width: pw, background: delay?.overdue ? '#ff7875' : '#4096ff', borderRadius: 3, cursor: 'grab', zIndex: 5, display: 'flex', alignItems: 'center', userSelect: 'none' }}
-                  onMouseDown={(e) => handleMouseDown(e, item, 'move')}>
-                  <div style={{ width: 5, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.2)', borderRadius: '3px 0 0 3px', flexShrink: 0 }}
-                    onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item, 'left'); }} />
+            {pw > 0 && (() => {
+              const isPlanParent = hasChildren(item);
+              const planTooltip = `계획: ${item.plan_start_date} ~ ${item.plan_end_date} (${getDaysDiff(item.plan_start_date, item.plan_end_date)}일)${delay ? ' | ⚠ ' + delay.text : ''}${isPlanParent ? ' | 자식 기준 자동 계산' : ''}`;
+              const planLabel = delay ? delay.text : (item.assignees?.[0]?.name || '');
+              return (
+              <Tooltip title={planTooltip}>
+                <div style={{ position: 'absolute', left: ps * cellWidth, top: PLAN_BAR_TOP, height: PLAN_BAR_H, width: pw, background: delay?.overdue ? '#ff7875' : '#4096ff', borderRadius: 3, cursor: isPlanParent ? 'not-allowed' : 'grab', zIndex: 5, opacity: isPlanParent ? 0.7 : 1, display: 'flex', alignItems: 'center', userSelect: 'none' }}
+                  onMouseDown={isPlanParent ? undefined : (e) => handleMouseDown(e, item, 'move')}>
+                  {!isPlanParent && (
+                    <div style={{ width: 5, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.2)', borderRadius: '3px 0 0 3px', flexShrink: 0 }}
+                      onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item, 'left'); }} />
+                  )}
                   <div style={{ flex: 1, fontSize: 9, color: 'white', overflow: 'hidden', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                    {delay ? delay.text : (item.assignees?.[0]?.name || '')}
+                    {isPlanParent ? `🔒 ${planLabel}` : planLabel}
                   </div>
-                  <div style={{ width: 5, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.2)', borderRadius: '0 3px 3px 0', flexShrink: 0 }}
-                    onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item, 'right'); }} />
+                  {!isPlanParent && (
+                    <div style={{ width: 5, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.2)', borderRadius: '0 3px 3px 0', flexShrink: 0 }}
+                      onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, item, 'right'); }} />
+                  )}
                 </div>
               </Tooltip>
-            )}
+              );
+            })()}
             {aw > 0 && (() => {
               const progressPct = Math.round((item.actual_progress || 0) * 100);
+              const ds = getDisplayStatus(item);
               const actualBg = delay?.overdue
                 ? '#ff7875'
                 : (item.actual_end_date ? '#52c41a' : '#faad14');
-              const barLabel = delay ? `${progressPct}% · ${delay.text}` : `${progressPct}%`;
+              const barLabel = `${progressPct}% · ${ds.text}`;
               const isParent = hasChildren(item);
-              const tooltipTitle = `실적: ${item.actual_start_date} ~ ${item.actual_end_date || '진행중'} | ${progressPct}%${delay ? ' | ' + delay.text : ''}${isParent ? ' | 자식 기준 자동 계산' : ''}`;
+              const tooltipTitle = `실적: ${item.actual_start_date} ~ ${item.actual_end_date || '진행중'} | ${progressPct}% | ${ds.text}${isParent ? ' | 자식 기준 자동 계산' : ''}`;
               return (
               <Tooltip title={tooltipTitle}>
                 <div style={{ position: 'absolute', left: as * cellWidth, top: ACTUAL_BAR_TOP, height: ACTUAL_BAR_H, width: aw, background: actualBg, borderRadius: 3, zIndex: 6, opacity: isParent ? 0.7 : 0.9, cursor: isParent ? 'not-allowed' : 'grab', display: 'flex', alignItems: 'center', userSelect: 'none' }}

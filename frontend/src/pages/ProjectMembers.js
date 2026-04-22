@@ -65,15 +65,21 @@ export default function ProjectMembers() {
     });
 
   // syncPmId 성공 후, 기존 PM의 ProjectMember 행이 있으면 'Member'로 자동 강등
-  const demoteOldPmIfNeeded = (newPmUserId) => {
-    const oldPm = members.find((m) => m.user_id === projectPmId);
-    if (!oldPm) return Promise.resolve(null);
-    if (oldPm.user_id === newPmUserId) return Promise.resolve(null);
-    // member_id가 null이면 ProjectMember 행이 없어 건드릴 수 없음 → 스킵
-    if (!oldPm.member_id) return Promise.resolve(null);
-    return api.put(`/projects/${id}/members/${oldPm.user_id}`, null, {
-      params: { project_role: 'Member' },
-    });
+  // ProjectMember 행이 없을 수도 있으므로 PUT을 시도하고 404는 무시 (정상 경로)
+  const demoteOldPmIfNeeded = async (newPmUserId) => {
+    if (projectPmId == null) return;
+    if (projectPmId === newPmUserId) return;
+    try {
+      await api.put(`/projects/${id}/members/${projectPmId}`, null, {
+        params: { project_role: 'Member' },
+      });
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        // ProjectMember 행이 없음 → 강등할 대상이 없는 정상 케이스, 그냥 통과
+        return;
+      }
+      throw err;
+    }
   };
 
   const fetchMembers = () => {

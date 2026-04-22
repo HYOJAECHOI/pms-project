@@ -98,14 +98,18 @@ def get_members(project_id: int, db: Session = Depends(get_db)):
     if project.pm_id:
         pm = db.query(models.User).filter(models.User.id == project.pm_id).first()
         if pm:
+            pm_member = db.query(models.ProjectMember).filter(
+                models.ProjectMember.project_id == project_id,
+                models.ProjectMember.user_id == project.pm_id,
+            ).first()
             result.append({
-                "member_id": None,
+                "member_id": pm_member.id if pm_member else None,
                 "user_id": pm.id,
                 "name": pm.name,
                 "email": pm.email,
                 "role": pm.role,
                 "project_role": "PM",
-                "is_org_admin": False,
+                "is_org_admin": bool(pm_member.is_org_admin) if pm_member else False,
                 "is_pm": True,
             })
             seen.add(pm.id)

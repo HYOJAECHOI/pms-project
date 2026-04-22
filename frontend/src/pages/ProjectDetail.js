@@ -179,12 +179,13 @@ export default function ProjectDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // navigate state.tab 변화에 따라 활성 탭 동기화 + 해당 탭 재fetch
+  // navigate state.tab / state.refresh 변화에 따라 활성 탭 동기화 + 해당 탭 재fetch
   useEffect(() => {
     const t = location.state?.tab;
-    if (!t) return;
-    setActiveTab(t);
-    if (t === 'wbs') fetchWbs();
+    const refresh = location.state?.refresh;
+    if (t) setActiveTab(t);
+    if (t === 'wbs' || refresh) fetchWbs();
+    if (refresh) fetchProject();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
@@ -239,6 +240,13 @@ export default function ProjectDetail() {
       .finally(() => setPosting(false));
   };
 
+  const deleteComment = (commentId) => {
+    api.delete(`/projects/${id}/comments/${commentId}`, { params: { user_id: userId } })
+      .then(() => fetchComments())
+      .then(() => message.success('삭제됐어요'))
+      .catch((err) => message.error(err?.response?.data?.detail || '삭제에 실패했어요'));
+  };
+
   const deleteFile = (fileId) => {
     api.delete(`/projects/files/${fileId}`)
       .then(() => fetchFiles())
@@ -250,6 +258,53 @@ export default function ProjectDetail() {
     const from = location.state?.from;
     if (from) navigate(from);
     else navigate('/projects');
+  };
+
+  // 계획 진척률 (오늘 기준, DB 값이 아닌 일정 기반 계산)
+  const calcPlanProgress = (item) => {
+    const s = item?.plan_start_date;
+    const e = item?.plan_end_date;
+    if (!s || !e) return 0;
+    const today = dayjs().startOf('day');
+    const start = dayjs(s).startOf('day');
+    const end = dayjs(e).startOf('day');
+    if (!today.isAfter(start)) return 0;
+    if (!today.isBefore(end)) return 1;
+    const total = end.diff(start, 'day');
+    if (total <= 0) return 1;
+    return Math.max(0, Math.min(1, today.diff(start, 'day') / total));
+  };
+
+  // 화면 전용 상태 라벨/색상 (GanttChart의 getDisplayStatus와 동일 규칙)
+  const getDisplayStatus = (item) => {
+    const wbsStatusColor = { '대기': 'default', '진행중': 'blue', '완료': 'green' };
+    const { status, plan_end_date: planEnd, actual_end_date: actualEnd } = item || {};
+    const today = dayjs().format('YYYY-MM-DD');
+    const days = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
+    if (status === '대기') return { text: '대기', color: wbsStatusColor['대기'], delayed: false };
+    if (status === '진행중') {
+      if (!actualEnd && planEnd && today > planEnd) return { text: `진행중 (${days(today, planEnd)}일 지연)`, color: 'red', delayed: true };
+      if (actualEnd && planEnd && actualEnd > planEnd) return { text: `진행중 (${days(actualEnd, planEnd)}일 초과)`, color: 'red', delayed: true };
+      return { text: '진행중', color: wbsStatusColor['진행중'], delayed: false };
+    }
+    if (status === '완료') {
+      if (!actualEnd || !planEnd) return { text: '완료', color: wbsStatusColor['완료'], delayed: false };
+      if (actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: 'green', delayed: false };
+      if (actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: 'orange', delayed: false };
+      return { text: '완료 (정시)', color: 'green', delayed: false };
+    }
+    return { text: status || '-', color: wbsStatusColor[status] || 'default', delayed: false };
+  };
+
+  // D-day 라벨 (plan_end_date 기준)
+  const dDayLabel = (planEnd) => {
+    if (!planEnd) return '-';
+    const today = dayjs().startOf('day');
+    const end = dayjs(planEnd).startOf('day');
+    const diff = end.diff(today, 'day');
+    if (diff > 0) return { text: `D-${diff}`, color: diff <= 7 ? 'orange' : 'blue' };
+    if (diff === 0) return { text: 'D-day', color: 'red' };
+    return { text: `D+${-diff}`, color: 'red' };
   };
 
   const wbsColumns = [
@@ -268,14 +323,28 @@ export default function ProjectDetail() {
     },
     { title: '담당자', dataIndex: 'assignee_name', key: 'assignee_name', width: 100 },
     {
-      title: '상태', dataIndex: 'status', key: 'status', width: 90,
-      render: (status) => <Tag color={statusColors[status]}>{status}</Tag>,
+      title: '상태', key: 'status', width: 150,
+      render: (_, record) => {
+        const ds = getDisplayStatus(record);
+        return <Tag color={ds.color}>{ds.text}</Tag>;
+      },
     },
     { title: '계획 시작일', dataIndex: 'plan_start_date', key: 'plan_start_date', width: 110 },
     { title: '계획 완료일', dataIndex: 'plan_end_date', key: 'plan_end_date', width: 110 },
     {
-      title: '계획진척률', dataIndex: 'plan_progress', key: 'plan_progress', width: 130,
-      render: (val) => <Progress percent={Math.round((val || 0) * 100)} size="small" />,
+      title: 'D-day', key: 'dday', width: 80,
+      render: (_, record) => {
+        const d = dDayLabel(record.plan_end_date);
+        if (d === '-') return <Text type="secondary">-</Text>;
+        return <Tag color={d.color}>{d.text}</Tag>;
+      },
+    },
+    {
+      title: '계획진척률', key: 'plan_progress', width: 130,
+      render: (_, record) => {
+        const pct = Math.round(calcPlanProgress(record) * 100);
+        return <Progress percent={pct} size="small" />;
+      },
     },
     {
       title: '실적진척률', dataIndex: 'actual_progress', key: 'actual_progress', width: 130,
@@ -922,67 +991,107 @@ export default function ProjectDetail() {
     </Card>
   );
 
-  // ─── 변경이력 / 댓글 ───
-  const commentsCard = (
-    <Card title="💬 변경이력 / 댓글" size="small">
-      <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-        <TextArea
-          value={commentInput}
-          onChange={(e) => setCommentInput(e.target.value)}
-          placeholder="댓글을 입력하세요..."
-          autoSize={{ minRows: 1, maxRows: 4 }}
-        />
-        <Button
-          type="primary" icon={<SendOutlined />}
-          loading={posting} onClick={submitComment}
-          disabled={!commentInput.trim()}
-        >
-          등록
-        </Button>
-      </Space.Compact>
+  // ─── 댓글 / 변경이력 (2열) ───
+  const manualComments = comments.filter((c) => c.comment_type !== 'auto');
+  const autoComments   = comments.filter((c) => c.comment_type === 'auto');
 
-      <List
-        size="small"
-        dataSource={comments}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="아직 댓글이 없어요." /> }}
-        renderItem={(c) => {
-          const isAuto = c.comment_type === 'auto';
-          return (
-            <List.Item style={{ borderBottom: '1px solid #f5f5f5', padding: '10px 0' }}>
-              <List.Item.Meta
-                avatar={
-                  <Avatar
-                    size="small"
-                    icon={isAuto ? <RobotOutlined /> : <UserOutlined />}
-                    style={{ background: isAuto ? '#bfbfbf' : '#1677ff' }}
+  const commentsCard = (
+    <Row gutter={16}>
+      {/* 좌: 💬 댓글 */}
+      <Col xs={24} md={12}>
+        <Card title="💬 댓글" size="small" style={{ height: '100%' }}>
+          <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+            <TextArea
+              value={commentInput}
+              onChange={(e) => setCommentInput(e.target.value)}
+              placeholder="댓글을 입력하세요..."
+              autoSize={{ minRows: 1, maxRows: 4 }}
+            />
+            <Button
+              type="primary" icon={<SendOutlined />}
+              loading={posting} onClick={submitComment}
+              disabled={!commentInput.trim()}
+            >
+              등록
+            </Button>
+          </Space.Compact>
+          <List
+            size="small"
+            dataSource={manualComments}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="아직 댓글이 없어요." /> }}
+            renderItem={(c) => {
+              const isMine = c.user_id === userId;
+              return (
+                <List.Item
+                  style={{ borderBottom: '1px solid #f5f5f5', padding: '10px 0' }}
+                  actions={isMine ? [
+                    <Popconfirm
+                      key="del"
+                      title="댓글을 삭제할까요?"
+                      onConfirm={() => deleteComment(c.id)}
+                      okText="삭제"
+                      cancelText="취소"
+                    >
+                      <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+                    </Popconfirm>,
+                  ] : undefined}
+                >
+                  <List.Item.Meta
+                    avatar={<Avatar size="small" icon={<UserOutlined />} style={{ background: '#1677ff' }} />}
+                    title={
+                      <Space size={6}>
+                        <Text strong style={{ fontSize: 12 }}>{c.user_name || '익명'}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {c.created_at ? dayjs(c.created_at).format('YYYY-MM-DD HH:mm') : ''}
+                        </Text>
+                      </Space>
+                    }
+                    description={
+                      <span style={{ color: '#333', fontSize: 13, whiteSpace: 'pre-wrap' }}>
+                        {c.content}
+                      </span>
+                    }
                   />
-                }
-                title={
-                  <Space size={6}>
-                    <Text strong style={{ fontSize: 12, color: isAuto ? '#999' : undefined }}>
-                      {c.user_name || (isAuto ? '시스템' : '익명')}
-                    </Text>
-                    {isAuto && <Tag color="default" style={{ marginRight: 0, fontSize: 10 }}>자동</Tag>}
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {c.created_at ? dayjs(c.created_at).format('YYYY-MM-DD HH:mm') : ''}
-                    </Text>
-                  </Space>
-                }
-                description={
-                  <span style={{
-                    color: isAuto ? '#999' : '#333',
-                    fontStyle: isAuto ? 'italic' : 'normal',
-                    fontSize: 13,
-                  }}>
-                    {c.content}
-                  </span>
-                }
-              />
-            </List.Item>
-          );
-        }}
-      />
-    </Card>
+                </List.Item>
+              );
+            }}
+          />
+        </Card>
+      </Col>
+
+      {/* 우: 📋 변경이력 */}
+      <Col xs={24} md={12}>
+        <Card title="📋 변경이력" size="small" style={{ height: '100%' }}>
+          <List
+            size="small"
+            dataSource={autoComments}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="변경이력이 없어요." /> }}
+            renderItem={(c) => (
+              <List.Item style={{ borderBottom: '1px solid #f5f5f5', padding: '10px 0' }}>
+                <List.Item.Meta
+                  avatar={<Avatar size="small" icon={<RobotOutlined />} style={{ background: '#bfbfbf' }} />}
+                  title={
+                    <Space size={6}>
+                      <Text strong style={{ fontSize: 12, color: '#999' }}>
+                        {c.user_name || '시스템'} 🤖
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {c.created_at ? dayjs(c.created_at).format('YYYY-MM-DD HH:mm') : ''}
+                      </Text>
+                    </Space>
+                  }
+                  description={
+                    <span style={{ color: '#999', fontStyle: 'italic', fontSize: 13, whiteSpace: 'pre-wrap' }}>
+                      {c.content}
+                    </span>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        </Card>
+      </Col>
+    </Row>
   );
 
   // ─── 개요 탭용: 프로젝트 멤버 카드 ───
@@ -1005,10 +1114,14 @@ export default function ProjectDetail() {
       ) : (
         <Space wrap size={[8, 8]}>
           {members.map((m) => {
-            const badge = m.project_role === 'PM' ? '👑 ' : m.project_role === 'PL' ? '⭐ ' : '';
-            const color = m.project_role === 'PM' ? 'gold'
+            const isPm = m.is_pm === true;
+            const badge = isPm ? '👑 ' : m.project_role === 'PL' ? '⭐ ' : '';
+            const color = isPm ? 'gold'
               : m.project_role === 'PL' ? 'blue'
               : m.project_role === 'PAO' ? 'cyan' : 'default';
+            // 실제 PM이 아니면서 project_role이 'PM'인 레거시 데이터는 'Member'로 표기
+            const displayRole = isPm ? 'PM'
+              : (m.project_role === 'PM' ? 'Member' : m.project_role);
             return (
               <Tag
                 key={m.user_id}
@@ -1017,8 +1130,8 @@ export default function ProjectDetail() {
                 onClick={() => setViewingUserId(m.user_id)}
               >
                 <strong>{badge}{m.user_name || m.name || `#${m.user_id}`}</strong>
-                {m.project_role && (
-                  <span style={{ marginLeft: 4, opacity: 0.75 }}>· {m.project_role}</span>
+                {displayRole && (
+                  <span style={{ marginLeft: 4, opacity: 0.75 }}>· {displayRole}</span>
                 )}
               </Tag>
             );
@@ -1045,39 +1158,53 @@ export default function ProjectDetail() {
   );
 
   // ─── 탭2: WBS/간트 ───
-  const wbsTab = (
-    <>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="전체 진척률" value={Math.round(overallProgress * 100)} suffix="%" />
-            <Progress percent={Math.round(overallProgress * 100)} style={{ marginTop: 8 }} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Row gutter={8}>
-              <Col span={8}><Statistic title="완료" value={completedCount} valueStyle={{ color: '#52c41a' }} /></Col>
-              <Col span={8}><Statistic title="진행중" value={inProgressCount} valueStyle={{ color: '#fa8c16' }} /></Col>
-              <Col span={8}><Statistic title="대기" value={pendingCount} valueStyle={{ color: '#8c8c8c' }} /></Col>
-            </Row>
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="전체 WBS 항목" value={wbsItems.length} suffix="개" />
-            <Button type="primary" style={{ marginTop: 8 }} block onClick={() => navigate(`/projects/${id}/gantt`, { state: { from: location.state?.from } })}>
-              간트차트 열기
-            </Button>
-          </Card>
-        </Col>
-      </Row>
-      <Card>
-        <Title level={5} style={{ marginBottom: 16 }}>WBS 현황</Title>
-        <Table dataSource={wbsItems} columns={wbsColumns} rowKey="id" scroll={{ x: 1200 }} size="small" pagination={false} />
-      </Card>
-    </>
-  );
+  const wbsTab = (() => {
+    const n = wbsItems.length;
+    const avgPlan = n > 0
+      ? Math.round(wbsItems.reduce((sum, it) => sum + calcPlanProgress(it), 0) / n * 100)
+      : 0;
+    const avgActual = n > 0
+      ? Math.round(wbsItems.reduce((sum, it) => sum + (it.actual_progress || 0), 0) / n * 100)
+      : 0;
+    const delayedCount = wbsItems.filter((it) => getDisplayStatus(it).delayed).length;
+    const doneCount    = wbsItems.filter((it) => it.status === '완료').length;
+    return (
+      <>
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic title="계획 진척률" value={avgPlan} suffix="%" valueStyle={{ color: '#1677ff' }} />
+              <Progress percent={avgPlan} size="small" style={{ marginTop: 8 }} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic title="실적 진척률" value={avgActual} suffix="%" valueStyle={{ color: '#52c41a' }} />
+              <Progress percent={avgActual} size="small" status={avgActual >= 100 ? 'success' : 'active'} style={{ marginTop: 8 }} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic title="지연 WBS" value={delayedCount} suffix={`/ ${n}`} valueStyle={{ color: delayedCount > 0 ? '#ff4d4f' : '#8c8c8c' }} />
+              <Button type="primary" style={{ marginTop: 8 }} block onClick={() => navigate(`/projects/${id}/gantt`, { state: { from: location.state?.from } })}>
+                간트차트 열기
+              </Button>
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card>
+              <Statistic title="완료 WBS" value={doneCount} suffix={`/ ${n}`} valueStyle={{ color: '#52c41a' }} />
+              <Text type="secondary" style={{ fontSize: 12 }}>전체 {n}건 중 완료</Text>
+            </Card>
+          </Col>
+        </Row>
+        <Card>
+          <Title level={5} style={{ marginBottom: 16 }}>WBS 현황</Title>
+          <Table dataSource={wbsItems} columns={wbsColumns} rowKey="id" scroll={{ x: 1400 }} size="small" pagination={false} />
+        </Card>
+      </>
+    );
+  })();
 
   // ─── 탭3: 멤버 ───
   const memberTab = (
