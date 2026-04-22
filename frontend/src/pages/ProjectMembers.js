@@ -64,6 +64,18 @@ export default function ProjectMembers() {
       params: { pm_id: newPmUserId, user_id: currentUserId },
     });
 
+  // syncPmId 성공 후, 기존 PM의 ProjectMember 행이 있으면 'Member'로 자동 강등
+  const demoteOldPmIfNeeded = (newPmUserId) => {
+    const oldPm = members.find((m) => m.user_id === projectPmId);
+    if (!oldPm) return Promise.resolve(null);
+    if (oldPm.user_id === newPmUserId) return Promise.resolve(null);
+    // member_id가 null이면 ProjectMember 행이 없어 건드릴 수 없음 → 스킵
+    if (!oldPm.member_id) return Promise.resolve(null);
+    return api.put(`/projects/${id}/members/${oldPm.user_id}`, null, {
+      params: { project_role: 'Member' },
+    });
+  };
+
   const fetchMembers = () => {
     api.get(`/projects/${id}/members`).then((res) => setMembers(res.data));
   };
@@ -133,6 +145,11 @@ export default function ProjectMembers() {
           return;
         }
         return syncPmId(userId)
+          .then(() =>
+            demoteOldPmIfNeeded(userId).catch(() => {
+              message.warning('기존 PM 역할 정리에 실패했어요. 멤버 목록에서 직접 변경해주세요.');
+            }),
+          )
           .then(() => { message.success('멤버가 추가됐어요!'); finalize(); })
           .catch(() => {
             message.error('PM 지정에 실패했어요. 개요탭에서 직접 수정해주세요');
@@ -170,6 +187,11 @@ export default function ProjectMembers() {
           return;
         }
         return syncPmId(userId)
+          .then(() =>
+            demoteOldPmIfNeeded(userId).catch(() => {
+              message.warning('기존 PM 역할 정리에 실패했어요. 멤버 목록에서 직접 변경해주세요.');
+            }),
+          )
           .then(() => { message.success('역할을 변경했어요.'); finalize(); })
           .catch(() => {
             message.error('PM 지정에 실패했어요. 개요탭에서 직접 수정해주세요');

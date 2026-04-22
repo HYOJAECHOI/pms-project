@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Typography, Button, Card, Row, Col, Tag, Space, Empty, Tooltip, Modal, List,
-  Input, Popover, message,
+  Input, Popover, message, Select,
 } from 'antd';
 import {
   ArrowLeftOutlined, PlusOutlined, BankOutlined, UserOutlined,
@@ -378,6 +378,10 @@ export default function ProjectList({ user }) {
   });
   const [activeDragId, setActiveDragId] = useState(null);
 
+  // DnD로 running 섹션에 드롭 시 열리는 PM 선택 모달
+  // shape: { project, newStage, prevStage, members, pickedPmId }
+  const [pmDropPicker, setPmDropPicker] = useState(null);
+
   // ─── URL 쿼리파라미터로 관리되는 상태 ─────────────────────────────────────
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedOrgId = searchParams.get('org') ? Number(searchParams.get('org')) : null;
@@ -631,7 +635,25 @@ export default function ProjectList({ user }) {
   // ─── DnD ───
   const handleDragStart = (event) => setActiveDragId(event.active.id);
   const handleDragCancel = () => setActiveDragId(null);
-  const handleDragEnd = (event) => {
+
+  // 단계 변경 PUT + 낙관적 업데이트 (실패 시 롤백)
+  const applyStageChange = (project, newStage, prevStage, extraParams = {}) => {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === project.id ? { ...p, pipeline_stage: newStage, ...extraParams } : p)),
+    );
+    return api.put(`/projects/${project.id}`, null, {
+      params: { pipeline_stage: newStage, ...extraParams },
+    })
+      .then(() => message.success(`'${project.name}' → ${newStage}`))
+      .catch(() => {
+        setProjects((prev) =>
+          prev.map((p) => (p.id === project.id ? { ...p, pipeline_stage: prevStage } : p)),
+        );
+        message.error('단계 변경에 실패했어요');
+      });
+  };
+
+  const handleDragEnd = async (event) => {
     setActiveDragId(null);
     const { active, over } = event;
     if (!over) return;
@@ -643,19 +665,28 @@ export default function ProjectList({ user }) {
     const project = data.project;
     const newStage = SECTION_TARGET_STAGE[toSection];
     if (!newStage) return;
-
     const prevStage = project.pipeline_stage;
-    setProjects((prev) =>
-      prev.map((p) => (p.id === project.id ? { ...p, pipeline_stage: newStage } : p)),
-    );
-    api.put(`/projects/${project.id}`, null, { params: { pipeline_stage: newStage } })
-      .then(() => message.success(`'${project.name}' → ${newStage}`))
-      .catch(() => {
-        setProjects((prev) =>
-          prev.map((p) => (p.id === project.id ? { ...p, pipeline_stage: prevStage } : p)),
-        );
-        message.error('단계 변경에 실패했어요');
+
+    // 수행(running) 섹션으로 드롭 시 PM 선택 모달
+    if (toSection === 'running') {
+      let members = [];
+      try {
+        const r = await api.get(`/projects/${project.id}/members`);
+        members = r.data || [];
+      } catch {
+        message.error('멤버 목록을 불러오지 못했어요');
+        // 실패해도 단계 변경은 기존 플로우로 진행
+        applyStageChange(project, newStage, prevStage);
+        return;
+      }
+      setPmDropPicker({
+        project, newStage, prevStage, members,
+        pickedPmId: project.pm_id || null,
       });
+      return;
+    }
+
+    applyStageChange(project, newStage, prevStage);
   };
 
   const activeDragProject = useMemo(() => {
@@ -1148,6 +1179,60 @@ export default function ProjectList({ user }) {
           )}
         </DragOverlay>
       </DndContext>
+
+      <Modal
+        open={!!pmDropPicker}
+        title="수행 PM을 지정해주세요"
+        onCancel={() => setPmDropPicker(null)}
+        destroyOnClose
+        footer={pmDropPicker ? [
+          <Button
+            key="skip"
+            onClick={() => {
+              applyStageChange(pmDropPicker.project, pmDropPicker.newStage, pmDropPicker.prevStage);
+              setPmDropPicker(null);
+            }}
+          >
+            건너뛰기 (나중에 지정)
+          </Button>,
+          <Button key="cancel" onClick={() => setPmDropPicker(null)}>닫기</Button>,
+          <Button
+            key="ok"
+            type="primary"
+            disabled={!pmDropPicker.pickedPmId}
+            onClick={() => {
+              applyStageChange(
+                pmDropPicker.project,
+                pmDropPicker.newStage,
+                pmDropPicker.prevStage,
+                { pm_id: pmDropPicker.pickedPmId },
+              );
+              setPmDropPicker(null);
+            }}
+          >
+            확인
+          </Button>,
+        ] : null}
+      >
+        {pmDropPicker && (
+          <>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+              '{pmDropPicker.project.name}' 프로젝트의 수행 PM을 선택해주세요.
+            </Text>
+            <Select
+              style={{ width: '100%' }}
+              value={pmDropPicker.pickedPmId}
+              onChange={(v) => setPmDropPicker((prev) => prev ? { ...prev, pickedPmId: v } : prev)}
+              placeholder="멤버에서 선택"
+              options={pmDropPicker.members.map((m) => ({
+                value: m.user_id,
+                label: `${m.user_name || m.name || `User #${m.user_id}`}${m.project_role ? ` · ${m.project_role}` : ''}`,
+              }))}
+              notFoundContent="등록된 멤버가 없어요. 먼저 멤버를 추가해주세요."
+            />
+          </>
+        )}
+      </Modal>
     </>
   );
 }
