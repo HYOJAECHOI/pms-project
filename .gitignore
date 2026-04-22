@@ -1,0 +1,7 @@
+backend/venv/
+backend/pms.db
+backend/uploads/
+frontend/node_modules/
+*.pyc
+__pycache__/
+.env

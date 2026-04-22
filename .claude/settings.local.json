@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Users/comhu_011/Desktop/pms-project/backend/venv/Scripts/python.exe\" -m pip install alembic)",
+      "Bash(venv/Scripts/alembic.exe init *)",
+      "Bash(venv/Scripts/alembic.exe revision *)",
+      "Bash(venv/Scripts/alembic.exe upgrade *)",
+      "Bash(venv/Scripts/alembic.exe current *)",
+      "Bash(venv/Scripts/python.exe -m alembic revision --autogenerate -m \"add project files and comments\")",
+      "Bash(venv/Scripts/python.exe -c \"import sqlite3; con=sqlite3.connect\\('pms.db'\\); print\\([r[0] for r in con.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\\\\\"\\).fetchall\\(\\)]\\)\")",
+      "Bash(venv/Scripts/python.exe -m alembic upgrade head)",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectList.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectTable.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectDetail.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK'\\)\")",
+      "Bash(./venv/Scripts/alembic.exe revision *)",
+      "Bash(./venv/Scripts/alembic.exe upgrade *)",
+      "Bash(./venv/Scripts/alembic.exe current *)"
+    ]
+  }
+}
