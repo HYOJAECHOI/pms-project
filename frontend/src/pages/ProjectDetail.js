@@ -576,7 +576,30 @@ export default function ProjectDetail() {
         <Descriptions.Item label="사업기간" span={2}>
           {viewOrInput('period',
             (project.start_date && project.end_date)
-              ? `${project.start_date} ~ ${project.end_date}`
+              ? (
+                <Space direction="vertical" size={2}>
+                  <span>{project.start_date} ~ {project.end_date}</span>
+                  {(() => {
+                    const os = project.original_start_date;
+                    const oe = project.original_end_date;
+                    if (!os || !oe) return null;
+                    if (os === project.start_date && oe === project.end_date) return null;
+                    const origDays = dayjs(oe).diff(dayjs(os), 'day');
+                    const curDays  = dayjs(project.end_date).diff(dayjs(project.start_date), 'day');
+                    const delta = curDays - origDays;
+                    return (
+                      <Space size={6}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          원래 계획: {os} ~ {oe}
+                        </Text>
+                        {delta > 0 && <Tag color="red">{delta}일 연장</Tag>}
+                        {delta < 0 && <Tag color="green">{-delta}일 단축</Tag>}
+                        {delta === 0 && <Tag>일정 이동</Tag>}
+                      </Space>
+                    );
+                  })()}
+                </Space>
+              )
               : '-',
             <RangePicker
               value={draft?.start_date && draft?.end_date ? [draft.start_date, draft.end_date] : null}

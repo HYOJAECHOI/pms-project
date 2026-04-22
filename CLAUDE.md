@@ -96,3 +96,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - DB 변경이면 alembic 필요 여부 확인
 - 영향받는 다른 파일 확인
 - 작업 완료 후 변경 요약 출력
+
+## 기능 보호 규칙
+매 작업 완료 후 반드시:
+1. git add . && git commit -m "작업내용"
+2. CHECKLIST.md에서 해당 항목 체크
+3. ⚠️ 항목들은 브라우저에서 직접 확인
+
+## Codex 검증 요청 시점
+- 5개 이상 파일 수정 후
+- 중요 기능(간트/멤버/파이프라인) 수정 후
+- 하루 작업 마무리 전

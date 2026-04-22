@@ -21,7 +21,8 @@
       "Bash(venv/Scripts/python.exe *)",
       "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/components/AppLayout.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('AppLayout OK'\\)\")",
       "Bash(node -e 'require\\('\\\\''@babel/parser'\\\\''\\).parse\\(require\\('\\\\''fs'\\\\''\\).readFileSync\\('\\\\''__TRACKED_VAR__'\\\\'','\\\\''utf8'\\\\''\\), {sourceType:'\\\\''module'\\\\'', plugins:['\\\\''jsx'\\\\'']}\\); console.log\\('\\\\''__TRACKED_VAR__ OK'\\\\''\\)')",
-      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/GanttChart.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('GanttChart OK'\\)\")"
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/GanttChart.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('GanttChart OK'\\)\")",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectDetail.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('ProjectDetail OK'\\)\")"
     ]
   }
 }
