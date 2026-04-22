@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button, Table, Tag, Typography, Card, Progress, Row, Col, Statistic, Tabs,
   Descriptions, Upload, Input, InputNumber, Select, DatePicker, Switch, Divider,
-  List, Avatar, Empty, Space, Tooltip, Popconfirm, message,
+  List, Avatar, Empty, Space, Tooltip, Popconfirm, message, Modal, Spin,
 } from 'antd';
 import {
   ArrowLeftOutlined, EditOutlined, TeamOutlined, UploadOutlined,
@@ -156,7 +156,16 @@ export default function ProjectDetail() {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const fetchProject  = () => api.get(`/projects/${id}`).then((r) => setProject(r.data));
+  // 유저 프로필 모달
+  const [viewingUserId, setViewingUserId] = useState(null);
+
+  // 수주 확정 시 PM 재지정 Modal
+  const [pmPickerOpen, setPmPickerOpen] = useState(false);
+  const [pickedPmId, setPickedPmId] = useState(null);
+
+  const fetchProject  = () => api.get(`/projects/${id}`)
+    .then((r) => setProject(r.data))
+    .catch(() => message.error('프로젝트 정보를 불러오지 못했어요'));
   const fetchWbs      = () => api.get(`/projects/${id}/wbs`).then((r) => setWbsItems(r.data)).catch(() => setWbsItems([]));
   const fetchFiles    = () => api.get(`/projects/${id}/files`).then((r) => setFiles(r.data)).catch(() => setFiles([]));
   const fetchComments = () => api.get(`/projects/${id}/comments`).then((r) => setComments(r.data)).catch(() => setComments([]));
@@ -237,7 +246,11 @@ export default function ProjectDetail() {
       .catch(() => message.error('삭제에 실패했어요'));
   };
 
-  const handleGoBack = () => navigate(-1);
+  const handleGoBack = () => {
+    const from = location.state?.from;
+    if (from) navigate(from);
+    else navigate('/projects');
+  };
 
   const wbsColumns = [
     { title: 'WBS 번호', dataIndex: 'wbs_number', key: 'wbs_number', width: 100 },
@@ -346,7 +359,24 @@ export default function ProjectDetail() {
                     <Button size="small">← 이전 단계로 ({prevStage})</Button>
                   </Popconfirm>
                 )}
-                {transitions.map((t) => (
+                {transitions.map((t) => {
+                  // 수주 확정(proposal → running) 시에는 Popconfirm 대신 PM 선택 Modal을 띄움
+                  if (t.target === '수주') {
+                    return (
+                      <Button
+                        key={t.key}
+                        type="primary"
+                        size="small"
+                        onClick={() => {
+                          setPickedPmId(project.pm_id || null);
+                          setPmPickerOpen(true);
+                        }}
+                      >
+                        {t.label}
+                      </Button>
+                    );
+                  }
+                  return (
                   <Popconfirm
                     key={t.key}
                     title={t.confirmTitle}
@@ -367,7 +397,8 @@ export default function ProjectDetail() {
                       </Button>
                     )}
                   </Popconfirm>
-                ))}
+                  );
+                })}
               </Space>
             </>
           ) : (
@@ -637,9 +668,19 @@ export default function ProjectDetail() {
         <Descriptions.Item label="PM">
           {fmtText(project.pm_name)}
         </Descriptions.Item>
-        <Descriptions.Item label="제안작성자">
+        <Descriptions.Item
+          label={
+            stageGroupKey(project.pipeline_stage) === 'proposal'
+              ? <span style={{ color: '#faad14', fontWeight: 700 }}>⭐ 제안작성자</span>
+              : '제안작성자'
+          }
+        >
           {viewOrInput('proposal_writer',
-            fmtText(project.proposal_writer),
+            <span style={stageGroupKey(project.pipeline_stage) === 'proposal'
+              ? { fontWeight: 700, color: '#d48806' }
+              : {}}>
+              {fmtText(project.proposal_writer)}
+            </span>,
             <Input value={draft?.proposal_writer || ''} onChange={(e) => setField('proposal_writer', e.target.value)} />,
           )}
         </Descriptions.Item>
@@ -921,12 +962,56 @@ export default function ProjectDetail() {
     </Card>
   );
 
+  // ─── 개요 탭용: 프로젝트 멤버 카드 ───
+  const membersOverviewCard = (
+    <Card
+      size="small"
+      title={<Space><TeamOutlined /><Text strong>👥 프로젝트 멤버 ({members.length}명)</Text></Space>}
+      extra={
+        <Button
+          size="small"
+          icon={<TeamOutlined />}
+          onClick={() => navigate(`/projects/${id}/members`, { state: { from: location.state?.from } })}
+        >
+          멤버 관리
+        </Button>
+      }
+    >
+      {members.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="등록된 멤버가 없어요." />
+      ) : (
+        <Space wrap size={[8, 8]}>
+          {members.map((m) => {
+            const badge = m.project_role === 'PM' ? '👑 ' : m.project_role === 'PL' ? '⭐ ' : '';
+            const color = m.project_role === 'PM' ? 'gold'
+              : m.project_role === 'PL' ? 'blue'
+              : m.project_role === 'PAO' ? 'cyan' : 'default';
+            return (
+              <Tag
+                key={m.user_id}
+                color={color}
+                style={{ cursor: 'pointer', padding: '4px 10px', margin: 0 }}
+                onClick={() => setViewingUserId(m.user_id)}
+              >
+                <strong>{badge}{m.user_name || m.name || `#${m.user_id}`}</strong>
+                {m.project_role && (
+                  <span style={{ marginLeft: 4, opacity: 0.75 }}>· {m.project_role}</span>
+                )}
+              </Tag>
+            );
+          })}
+        </Space>
+      )}
+    </Card>
+  );
+
   // ─── 탭1: 개요 ───
   const overviewTab = (
     <Space direction="vertical" style={{ width: '100%' }} size={16}>
       {pipelineStageCard}
       {editToolbar}
       {basicInfoCard}
+      {membersOverviewCard}
       {scheduleCard}
       {contractCard}
       {evalCard}
@@ -958,7 +1043,7 @@ export default function ProjectDetail() {
         <Col xs={24} md={8}>
           <Card>
             <Statistic title="전체 WBS 항목" value={wbsItems.length} suffix="개" />
-            <Button type="primary" style={{ marginTop: 8 }} block onClick={() => navigate(`/projects/${id}/gantt`)}>
+            <Button type="primary" style={{ marginTop: 8 }} block onClick={() => navigate(`/projects/${id}/gantt`, { state: { from: location.state?.from } })}>
               간트차트 열기
             </Button>
           </Card>
@@ -977,7 +1062,7 @@ export default function ProjectDetail() {
       size="small"
       title={<Space><TeamOutlined /><Text strong>참여 멤버 ({members.length}명)</Text></Space>}
       extra={
-        <Button icon={<TeamOutlined />} onClick={() => navigate(`/projects/${id}/members`)}>
+        <Button icon={<TeamOutlined />} onClick={() => navigate(`/projects/${id}/members`, { state: { from: location.state?.from } })}>
           멤버 관리
         </Button>
       }
@@ -1056,7 +1141,7 @@ export default function ProjectDetail() {
               api.delete(`/projects/${id}`)
                 .then(() => {
                   message.success('프로젝트가 삭제됐어요');
-                  navigate('/projects');
+                  navigate(location.state?.from || '/projects');
                 })
                 .catch(() => message.error('삭제에 실패했어요'));
             }}
@@ -1079,6 +1164,135 @@ export default function ProjectDetail() {
           { key: 'reports',  label: '업무보고',  children: reportTab },
         ]}
       />
+
+      <UserProfileModal
+        userId={viewingUserId}
+        onClose={() => setViewingUserId(null)}
+        currentUserRole={me?.role}
+      />
+
+      <Modal
+        open={pmPickerOpen}
+        title="수행 PM을 지정해주세요"
+        onCancel={() => setPmPickerOpen(false)}
+        okText="확인하고 수주 확정"
+        cancelText="닫기"
+        onOk={() => {
+          if (!pickedPmId) {
+            message.warning('PM을 선택해주세요. (건너뛰기로 진행할 수 있어요.)');
+            return;
+          }
+          updateField({ pipeline_stage: '수주', pm_id: pickedPmId });
+          setPmPickerOpen(false);
+        }}
+        footer={[
+          <Button
+            key="skip"
+            onClick={() => {
+              updateField({ pipeline_stage: '수주' });
+              setPmPickerOpen(false);
+            }}
+          >
+            건너뛰기 (나중에 지정)
+          </Button>,
+          <Button key="cancel" onClick={() => setPmPickerOpen(false)}>닫기</Button>,
+          <Button
+            key="ok"
+            type="primary"
+            disabled={!pickedPmId}
+            onClick={() => {
+              updateField({ pipeline_stage: '수주', pm_id: pickedPmId });
+              setPmPickerOpen(false);
+            }}
+          >
+            확인하고 수주 확정
+          </Button>,
+        ]}
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+          수행 단계로 진입하기 전에 PM을 확정해주세요.
+        </Text>
+        <Select
+          style={{ width: '100%' }}
+          value={pickedPmId}
+          onChange={setPickedPmId}
+          placeholder="멤버에서 선택"
+          options={members.map((m) => ({
+            value: m.user_id,
+            label: `${m.user_name || m.name || `User #${m.user_id}`}${m.project_role ? ` · ${m.project_role}` : ''}`,
+          }))}
+          notFoundContent="등록된 멤버가 없어요. 멤버를 먼저 추가해주세요."
+        />
+      </Modal>
     </>
+  );
+}
+
+// ─── 유저 프로필 모달 ───
+function UserProfileModal({ userId, onClose, currentUserRole }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!userId) { setUser(null); return; }
+    setLoading(true);
+    api.get(`/users/${userId}`)
+      .then((res) => setUser(res.data))
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  const canViewDetail = currentUserRole === 'admin' || currentUserRole === 'manager';
+  const roleLabel = { admin: '관리자', manager: '매니저', user: '일반' };
+
+  return (
+    <Modal
+      open={userId != null}
+      onCancel={onClose}
+      footer={null}
+      title={user ? `${user.name} 정보` : '유저 정보'}
+      width={480}
+      destroyOnClose
+    >
+      <Spin spinning={loading}>
+        {user ? (
+          <>
+            <Descriptions column={1} size="small" bordered labelStyle={{ width: 100 }}>
+              <Descriptions.Item label="소속 본부">{user.organization_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="직위">{user.position || '-'}</Descriptions.Item>
+              <Descriptions.Item label="이메일">{user.email}</Descriptions.Item>
+            </Descriptions>
+
+            <Divider orientation="left" style={{ marginTop: 16, marginBottom: 8, fontSize: 13 }}>
+              상세 정보
+            </Divider>
+            {canViewDetail ? (
+              <Descriptions column={1} size="small" bordered labelStyle={{ width: 100 }}>
+                <Descriptions.Item label="system 역할">
+                  <Tag color={currentUserRole === 'admin' ? 'red' : 'blue'}>
+                    {roleLabel[user.role] || user.role}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="프로젝트 역할">{user.project_role || '-'}</Descriptions.Item>
+                <Descriptions.Item label="본부 관리자">
+                  <Tag color={user.is_org_admin ? 'gold' : 'default'}>
+                    {user.is_org_admin ? '예' : '아니오'}
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <div style={{
+                padding: '16px', textAlign: 'center', color: '#999',
+                background: '#fafafa', borderRadius: 4, fontSize: 13,
+              }}>
+                🔒 열람 권한이 없습니다
+              </div>
+            )}
+          </>
+        ) : !loading && (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="유저 정보를 불러오지 못했어요" />
+        )}
+      </Spin>
+    </Modal>
   );
 }

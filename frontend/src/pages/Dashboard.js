@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import api from '../api/axios';
 
 const { Title, Text } = Typography;
-const statusColor = { '진행중': 'blue', '완료': 'green', '대기': 'default', '취소': 'red' };
+const statusColor = { '제안': 'blue', '수행': 'green', '종료': 'default' };
 
 export default function Dashboard() {
   const [projects, setProjects] = useState([]);
@@ -64,8 +64,8 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  const inProgress = projects.filter((p) => p.status === '진행중' || p.status === '수행').length;
-  const completed  = projects.filter((p) => p.status === '완료' || p.status === '종료').length;
+  const inProgress = projects.filter((p) => p.status === '수행').length;
+  const completed  = projects.filter((p) => p.status === '종료').length;
 
   // 프로젝트별 소속 WBS 중 지연 항목이 1개 이상이면 해당 프로젝트를 지연 프로젝트로 카운트
   const delayedProjectCount = useMemo(() => (
@@ -87,7 +87,7 @@ export default function Dashboard() {
   }, [wbsStats]);
 
   const columns = [
-    { title: '프로젝트명', dataIndex: 'name', key: 'name', render: (text, record) => <a onClick={() => navigate(`/projects/${record.id}`)} style={{ fontWeight: 'bold' }}>{text}</a> },
+    { title: '프로젝트명', dataIndex: 'name', key: 'name', render: (text, record) => <a onClick={() => navigate(`/projects/${record.id}`, { state: { from: '/dashboard' } })} style={{ fontWeight: 'bold' }}>{text}</a> },
     { title: 'PM', dataIndex: 'pm_name', key: 'pm_name', width: 80 },
     { title: '상태', dataIndex: 'status', key: 'status', width: 80, render: (s) => <Tag color={statusColor[s]}>{s}</Tag> },
     { title: '기간', key: 'period', width: 180, render: (_, r) => <Text style={{ fontSize: 11 }}>{r.start_date} ~ {r.end_date}</Text> },
@@ -107,7 +107,7 @@ export default function Dashboard() {
     },
     {
       title: '바로가기', key: 'action', width: 90, render: (_, r) => (
-        <Button size="small" type="primary" onClick={() => navigate(`/projects/${r.id}/gantt`)}>간트차트</Button>
+        <Button size="small" type="primary" onClick={() => navigate(`/projects/${r.id}/gantt`, { state: { from: '/dashboard' } })}>간트차트</Button>
       ),
     },
   ];

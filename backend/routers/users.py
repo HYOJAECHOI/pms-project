@@ -77,6 +77,29 @@ def get_users(db: Session = Depends(get_db)):
         })
     return result
 
+# 유저 단건 조회
+@router.get("/users/{user_id}")
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="유저를 찾을 수 없어요.")
+    organization_name = None
+    if user.organization_id:
+        org = db.query(models.Organization).filter(models.Organization.id == user.organization_id).first()
+        organization_name = org.name if org else None
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "position": user.position,
+        "project_role": user.project_role,
+        "organization_id": user.organization_id,
+        "organization_name": organization_name,
+        "is_org_admin": bool(user.is_org_admin),
+    }
+
+
 # 유저 수정
 @router.put("/users/{user_id}")
 def update_user(

@@ -2,7 +2,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import {
   Table, Button, Input, Tag, Select, Dropdown, message, Space, Typography, Tooltip,
 } from 'antd';
-import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, SearchOutlined, PlusOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 import api from '../api/axios';
@@ -148,7 +148,7 @@ const COL_META = [
   { key: 'description',     title: '비고',              width: 220 },
 ];
 
-export default function ProjectTable({ section, projects, user, onBack, onProjectUpdated }) {
+export default function ProjectTable({ section, projects, user, onBack, onProjectUpdated, onCreate }) {
   const navigate = useNavigate();
   const location = useLocation();
   const fromPath = location.pathname + (location.search || '');
@@ -357,14 +357,21 @@ export default function ProjectTable({ section, projects, user, onBack, onProjec
             </Tooltip>
           )}
         </Space>
-        <Input
-          placeholder="사업명 · 발주기관 · PM · 제안작성자 검색"
-          prefix={<SearchOutlined />}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          allowClear
-          style={{ maxWidth: 320, width: '100%' }}
-        />
+        <Space size={8} wrap>
+          <Input
+            placeholder="사업명 · 발주기관 · PM · 제안작성자 검색"
+            prefix={<SearchOutlined />}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            allowClear
+            style={{ maxWidth: 320, width: '100%' }}
+          />
+          {onCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
+              프로젝트 생성
+            </Button>
+          )}
+        </Space>
       </div>
 
       <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>

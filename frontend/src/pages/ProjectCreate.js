@@ -1,11 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Form, Input, InputNumber, Select, Switch, Button, Typography, Card, DatePicker, Tag, Space,
+  Form, Input, InputNumber, Select, Switch, Button, Typography, Card, DatePicker, Tag, Space, message,
 } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import api from '../api/axios';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { STAGE_GROUPS, STAGE_COLOR, DEFAULT_STAGE } from '../constants/stages';
+
+const SECTION_TO_STAGE = {
+  review:   '공고전',
+  proposal: '제안계획',
+  running:  '수주',
+  done:     '완료',
+  history:  '실주',
+};
+
+const SECTION_TO_STATUS = {
+  review:   '제안',
+  proposal: '제안',
+  running:  '수행',
+  done:     '종료',
+  history:  '종료',
+};
+
+// 상태 → 표시할 단계 그룹 키
+const STATUS_GROUP_KEYS = {
+  '제안': ['review', 'proposal'],
+  '수행': ['running', 'done'],
+  '종료': ['done', 'history'],
+};
+
+const getVisibleGroups = (status) => {
+  const keys = STATUS_GROUP_KEYS[status];
+  if (!keys) return STAGE_GROUPS;
+  return STAGE_GROUPS.filter((g) => keys.includes(g.key));
+};
 
 const { Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -24,14 +53,35 @@ const pctParser      = (v) => (v ? v.replace(/%/g, '') : '');
 
 export default function ProjectCreate() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [form] = Form.useForm();
   const [orgs, setOrgs] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const orgParam = searchParams.get('org');
+  const sectionParam = searchParams.get('section');
+  const presetOrgId = orgParam ? Number(orgParam) : undefined;
+  const presetStage = (sectionParam && SECTION_TO_STAGE[sectionParam]) || DEFAULT_STAGE;
+  const presetStatus = (sectionParam && SECTION_TO_STATUS[sectionParam]) || '제안';
+
+  const currentStatus = Form.useWatch('status', form);
+  const visibleGroups = getVisibleGroups(currentStatus);
+
+  const handleValuesChange = (changed) => {
+    if (changed.status) {
+      const groups = getVisibleGroups(changed.status);
+      const firstStage = groups[0]?.stages[0];
+      if (firstStage) form.setFieldValue('pipeline_stage', firstStage);
+    }
+  };
 
   useEffect(() => {
     api.get('/organizations').then((res) => setOrgs(res.data)).catch(() => {});
   }, []);
 
   const handleSubmit = (values) => {
+    if (submitting) return;
     const params = new URLSearchParams();
     const addStr = (k, v) => { if (v != null && v !== '') params.append(k, v); };
     const addDate = (k, v, fmt) => { if (v) params.append(k, v.format(fmt)); };
@@ -85,26 +135,67 @@ export default function ProjectCreate() {
     addStr('special_notes', values.special_notes);
     addStr('announcement_url', values.announcement_url);
 
-    api.post(`/projects?${params.toString()}`).then(() => navigate('/projects'));
+    setSubmitting(true);
+    api.post(`/projects?${params.toString()}`)
+      .then(() => navigate(backTarget()))
+      .catch(() => {
+        message.error('프로젝트 생성에 실패했어요');
+        setSubmitting(false);
+      });
   };
+
+  const backTarget = () =>
+    location.state?.from
+      || (orgParam ? `/projects?org=${orgParam}` : '/projects');
 
   return (
     <>
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/projects')} style={{ marginBottom: 16 }}>
+      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget())} style={{ marginBottom: 16 }}>
         목록으로
       </Button>
       <Form
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
+        onValuesChange={handleValuesChange}
         initialValues={{
-          status: '제안',
-          pipeline_stage: DEFAULT_STAGE,
+          status: presetStatus,
+          pipeline_stage: presetStage,
+          organization_id: presetOrgId,
           joint_performance: false,
           subcontract_allowed: false,
         }}
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {/* ─── 상태 / 단계 ─── */}
+          <Card size="small" title="🎯 상태 / 단계">
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Form.Item label="상태" name="status" style={{ flex: 1, minWidth: 120 }}>
+                <Select>
+                  <Select.Option value="제안">제안</Select.Option>
+                  <Select.Option value="수행">수행</Select.Option>
+                  <Select.Option value="종료">종료</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item label="단계" name="pipeline_stage" style={{ flex: 1, minWidth: 180 }}>
+                <Select optionLabelProp="label">
+                  {visibleGroups.map((g) => (
+                    <Select.OptGroup
+                      key={g.key}
+                      label={<span style={{ color: g.color, fontWeight: 600 }}>{g.icon} {g.label}</span>}
+                    >
+                      {g.stages.map((s) => (
+                        <Select.Option key={s} value={s} label={s}>
+                          <Tag color={STAGE_COLOR[s] || 'default'} style={{ marginRight: 0 }}>{s}</Tag>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  ))}
+                </Select>
+              </Form.Item>
+            </div>
+          </Card>
+
           {/* ─── 기본 정보 ─── */}
           <Card size="small" title="📋 기본 정보">
             <Form.Item label="사업명" name="name" rules={[{ required: true, message: '사업명을 입력해주세요.' }]}>
@@ -154,31 +245,6 @@ export default function ProjectCreate() {
                   style={{ width: '100%' }} min={0} step={1000000}
                   formatter={moneyFormatter} parser={moneyParser}
                 />
-              </Form.Item>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Form.Item label="상태" name="status" style={{ flex: 1, minWidth: 120 }}>
-                <Select>
-                  <Select.Option value="제안">제안</Select.Option>
-                  <Select.Option value="수행">수행</Select.Option>
-                  <Select.Option value="종료">종료</Select.Option>
-                </Select>
-              </Form.Item>
-              <Form.Item label="파이프라인 단계" name="pipeline_stage" style={{ flex: 1, minWidth: 180 }}>
-                <Select optionLabelProp="label">
-                  {STAGE_GROUPS.map((g) => (
-                    <Select.OptGroup
-                      key={g.key}
-                      label={<span style={{ color: g.color, fontWeight: 600 }}>{g.icon} {g.label}</span>}
-                    >
-                      {g.stages.map((s) => (
-                        <Select.Option key={s} value={s} label={s}>
-                          <Tag color={STAGE_COLOR[s] || 'default'} style={{ marginRight: 0 }}>{s}</Tag>
-                        </Select.Option>
-                      ))}
-                    </Select.OptGroup>
-                  ))}
-                </Select>
               </Form.Item>
             </div>
           </Card>
@@ -296,8 +362,8 @@ export default function ProjectCreate() {
 
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">생성하기</Button>
-              <Button onClick={() => navigate('/projects')}>취소</Button>
+              <Button type="primary" htmlType="submit" loading={submitting} disabled={submitting}>생성하기</Button>
+              <Button onClick={() => navigate(backTarget())} disabled={submitting}>취소</Button>
             </Space>
           </Form.Item>
         </Space>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Typography, Menu, Input, Avatar, Button, AutoComplete, Tag } from 'antd';
+import { Layout, Typography, Menu, Input, Avatar, Button, AutoComplete, Tag, Tooltip, message } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { DashboardOutlined, UnorderedListOutlined, BarChartOutlined, SearchOutlined, UserOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined, CheckCircleOutlined, TeamOutlined, FileDoneOutlined, AuditOutlined, BankOutlined } from '@ant-design/icons';
 import api from '../api/axios';
@@ -62,7 +62,7 @@ export default function AppLayout({ user, onLogout, children }) {
     if (value === '__none__') return;
     setSearchValue('');
     setSearchOptions([]);
-    navigate(`/projects/${value}`);
+    navigate(`/projects/${value}`, { state: { from: location.pathname + (location.search || '') } });
   };
 
   // system_role 기준: admin은 모든 권한, manager는 검토 권한, user는 일반 권한
@@ -85,6 +85,27 @@ export default function AppLayout({ user, onLogout, children }) {
   ];
 
   const siderWidth = collapsed ? 80 : 220;
+
+  const isDev = process.env.NODE_ENV === 'development';
+  const testAccounts = [
+    { label: '사장',   emoji: '👑', email: 'admin@pms.com' },
+    { label: '본부장', emoji: '🏢', email: 'manager@pms.com' },
+    { label: 'PM',     emoji: '📋', email: 'pm@pms.com' },
+    { label: '사원',   emoji: '👤', email: 'user@pms.com' },
+  ];
+  const loginAs = async (email) => {
+    try {
+      const params = new URLSearchParams();
+      params.append('email', email);
+      params.append('password', '1234');
+      const res = await api.post(`/auth/login?${params.toString()}`);
+      localStorage.setItem('token', res.data.access_token);
+      localStorage.setItem('user', JSON.stringify(res.data.user));
+      window.location.reload();
+    } catch (err) {
+      message.error(err.response?.data?.detail || '계정 전환에 실패했어요');
+    }
+  };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -113,6 +134,28 @@ export default function AppLayout({ user, onLogout, children }) {
               <div>
                 <Text style={{ color: 'white', fontSize: 12, display: 'block' }}>{user?.name}</Text>
                 <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>{user?.role}</Text>
+              </div>
+            </div>
+          )}
+          {isDev && (
+            <div style={{ marginBottom: 8, padding: '8px', background: 'rgba(255,255,255,0.04)', borderRadius: 6 }}>
+              {!collapsed && (
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 10, display: 'block', marginBottom: 6 }}>
+                  🧪 테스트 계정
+                </Text>
+              )}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: collapsed ? 'center' : 'flex-start' }}>
+                {testAccounts.map((acc) => (
+                  <Tooltip key={acc.email} title={`${acc.label} (${acc.email})`} placement="right">
+                    <Button
+                      size="small"
+                      onClick={() => loginAs(acc.email)}
+                      style={{ padding: '0 6px', minWidth: collapsed ? 28 : 'auto', fontSize: 12 }}
+                    >
+                      {acc.emoji}
+                    </Button>
+                  </Tooltip>
+                ))}
               </div>
             </div>
           )}

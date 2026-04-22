@@ -1,41 +1,74 @@
 import React, { useEffect, useState } from 'react';
-import { Form, Input, InputNumber, Select, Button, Typography, Card, DatePicker, Tag } from 'antd';
+import { Form, Input, InputNumber, Select, Button, Typography, Card, DatePicker, Tag, Spin, message } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import api from '../api/axios';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { STAGE_GROUPS, STAGE_COLOR, DEFAULT_STAGE } from '../constants/stages';
 
 const { Title } = Typography;
 const { RangePicker } = DatePicker;
 
+// 상태 → 표시할 단계 그룹 키 (ProjectCreate.js와 동일 규칙)
+const STATUS_GROUP_KEYS = {
+  '제안': ['review', 'proposal'],
+  '수행': ['running', 'done'],
+  '종료': ['done', 'history'],
+};
+
+const getVisibleGroups = (status) => {
+  const keys = STATUS_GROUP_KEYS[status];
+  if (!keys) return STAGE_GROUPS;
+  return STAGE_GROUPS.filter((g) => keys.includes(g.key));
+};
+
 export default function ProjectEdit() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [form] = Form.useForm();
   const [orgs, setOrgs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const currentStatus = Form.useWatch('status', form);
+  const visibleGroups = getVisibleGroups(currentStatus);
+
+  const handleValuesChange = (changed) => {
+    if (changed.status) {
+      const groups = getVisibleGroups(changed.status);
+      const firstStage = groups[0]?.stages[0];
+      if (firstStage) form.setFieldValue('pipeline_stage', firstStage);
+    }
+  };
 
   useEffect(() => {
     api.get('/organizations').then((res) => setOrgs(res.data)).catch(() => {});
-    api.get(`/projects/${id}`).then(res => {
-      form.setFieldsValue({
-        name: res.data.name,
-        description: res.data.description || '',
-        status: res.data.status,
-        organization_id: res.data.organization_id ?? null,
-        pipeline_stage: res.data.pipeline_stage || DEFAULT_STAGE,
-        client: res.data.client || '',
-        country: res.data.country || '',
-        budget: res.data.budget ?? null,
-        bid_deadline: res.data.bid_deadline ? dayjs(res.data.bid_deadline) : null,
-        period: res.data.start_date && res.data.end_date
-          ? [dayjs(res.data.start_date), dayjs(res.data.end_date)]
-          : null,
-      });
-    });
+    setLoading(true);
+    api.get(`/projects/${id}`)
+      .then(res => {
+        form.setFieldsValue({
+          name: res.data.name,
+          description: res.data.description || '',
+          status: res.data.status,
+          organization_id: res.data.organization_id ?? null,
+          pipeline_stage: res.data.pipeline_stage || DEFAULT_STAGE,
+          client: res.data.client || '',
+          country: res.data.country || '',
+          budget: res.data.budget ?? null,
+          bid_deadline: res.data.bid_deadline ? dayjs(res.data.bid_deadline) : null,
+          period: res.data.start_date && res.data.end_date
+            ? [dayjs(res.data.start_date), dayjs(res.data.end_date)]
+            : null,
+        });
+      })
+      .catch(() => message.error('프로젝트 정보를 불러오지 못했어요'))
+      .finally(() => setLoading(false));
   }, [id]);
 
   const handleSubmit = (values) => {
+    if (saving) return;
     const params = new URLSearchParams();
     params.append('name', values.name);
     params.append('description', values.description || '');
@@ -50,23 +83,40 @@ export default function ProjectEdit() {
       params.append('start_date', values.period[0].format('YYYY-MM-DD'));
       params.append('end_date', values.period[1].format('YYYY-MM-DD'));
     }
-    api.put(`/projects/${id}?${params.toString()}`).then(() => navigate(`/projects/${id}`));
+    setSaving(true);
+    api.put(`/projects/${id}?${params.toString()}`)
+      .then(() => {
+        const from = location.state?.from;
+        navigate(from || `/projects/${id}`);
+      })
+      .catch(() => {
+        message.error('저장에 실패했어요');
+        setSaving(false);
+      });
   };
 
   const handleDelete = () => {
+    if (deleting) return;
     if (window.confirm('정말 삭제할까요?')) {
-      api.delete(`/projects/${id}`).then(() => navigate('/projects'));
+      setDeleting(true);
+      api.delete(`/projects/${id}`)
+        .then(() => navigate(location.state?.from || '/projects'))
+        .catch(() => {
+          message.error('삭제에 실패했어요');
+          setDeleting(false);
+        });
     }
   };
 
   return (
     <>
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${id}`)} style={{ marginBottom: 16 }}>
+      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(location.state?.from || `/projects/${id}`)} style={{ marginBottom: 16 }}>
         돌아가기
       </Button>
       <Card style={{ maxWidth: 600, margin: '0 auto' }}>
         <Title level={4}>프로젝트 수정</Title>
-        <Form form={form} layout="vertical" onFinish={handleSubmit}>
+        <Spin spinning={loading}>
+        <Form form={form} layout="vertical" onFinish={handleSubmit} onValuesChange={handleValuesChange}>
           <Form.Item label="프로젝트 이름" name="name" rules={[{ required: true, message: '프로젝트 이름을 입력해주세요!' }]}>
             <Input placeholder="프로젝트 이름 입력" />
           </Form.Item>
@@ -83,9 +133,9 @@ export default function ProjectEdit() {
               <Select.Option value="종료">종료</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item label="파이프라인 단계" name="pipeline_stage">
+          <Form.Item label="단계" name="pipeline_stage">
             <Select optionLabelProp="label">
-              {STAGE_GROUPS.map((g) => (
+              {visibleGroups.map((g) => (
                 <Select.OptGroup
                   key={g.key}
                   label={
@@ -133,11 +183,12 @@ export default function ProjectEdit() {
             </Form.Item>
           </div>
           <Form.Item>
-            <Button type="primary" htmlType="submit" style={{ marginRight: 8 }}>수정하기</Button>
-            <Button onClick={() => navigate(`/projects/${id}`)} style={{ marginRight: 8 }}>취소</Button>
-            <Button danger onClick={handleDelete}>삭제하기</Button>
+            <Button type="primary" htmlType="submit" style={{ marginRight: 8 }} loading={saving} disabled={saving || deleting}>수정하기</Button>
+            <Button onClick={() => navigate(location.state?.from || `/projects/${id}`)} style={{ marginRight: 8 }} disabled={saving || deleting}>취소</Button>
+            <Button danger onClick={handleDelete} loading={deleting} disabled={saving || deleting}>삭제하기</Button>
           </Form.Item>
         </Form>
+        </Spin>
       </Card>
     </>
   );

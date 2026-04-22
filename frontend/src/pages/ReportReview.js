@@ -21,29 +21,31 @@ export default function ReportReview({ user }) {
 
   useEffect(() => {
     // admin은 모든 프로젝트 검토 가능, 그 외(manager)는 ProjectMember.project_role === 'PM' 인 프로젝트만
-    api.get('/projects').then(async (res) => {
-      const allProjects = res.data || [];
-      if (user?.role === 'admin') {
-        setProjects(allProjects);
-        if (allProjects.length > 0) setSelectedProjectId(allProjects[0].id);
-        return;
-      }
-      const memberResults = await Promise.all(
-        allProjects.map((p) =>
-          api
-            .get(`/projects/${p.id}/members`)
-            .then((r) => ({ project: p, members: r.data || [] }))
-            .catch(() => ({ project: p, members: [] }))
-        )
-      );
-      const pmProjects = memberResults
-        .filter(({ members }) =>
-          members.some((m) => m.user_id === user?.id && m.project_role === 'PM')
-        )
-        .map(({ project }) => project);
-      setProjects(pmProjects);
-      if (pmProjects.length > 0) setSelectedProjectId(pmProjects[0].id);
-    });
+    api.get('/projects')
+      .then(async (res) => {
+        const allProjects = res.data || [];
+        if (user?.role === 'admin') {
+          setProjects(allProjects);
+          if (allProjects.length > 0) setSelectedProjectId(allProjects[0].id);
+          return;
+        }
+        const memberResults = await Promise.all(
+          allProjects.map((p) =>
+            api
+              .get(`/projects/${p.id}/members`)
+              .then((r) => ({ project: p, members: r.data || [] }))
+              .catch(() => ({ project: p, members: [] }))
+          )
+        );
+        const pmProjects = memberResults
+          .filter(({ members }) =>
+            members.some((m) => m.user_id === user?.id && m.project_role === 'PM')
+          )
+          .map(({ project }) => project);
+        setProjects(pmProjects);
+        if (pmProjects.length > 0) setSelectedProjectId(pmProjects[0].id);
+      })
+      .catch(() => message.error('프로젝트 목록을 불러오지 못했어요'));
   }, [user?.id, user?.role]);
 
   const loadReports = (projectId) => {

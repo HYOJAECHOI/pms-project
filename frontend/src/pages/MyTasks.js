@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Typography, Card, Table, Tag, Progress, Select, Row, Col, Statistic, Badge } from 'antd';
+import { Typography, Card, Table, Tag, Progress, Select, Row, Col, Statistic, Badge, Empty, message } from 'antd';
 import { ClockCircleOutlined, CheckCircleOutlined, WarningOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
@@ -13,22 +13,36 @@ export default function MyTasks({ user }) {
   const [projects, setProjects] = useState([]);
   const [filterStatus, setFilterStatus] = useState(null);
   const [filterProject, setFilterProject] = useState(null);
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    api.get('/projects').then(res => {
-      setProjects(res.data);
-      const promises = res.data.map(p =>
-        api.get(`/projects/${p.id}/wbs`).then(wbsRes =>
-          wbsRes.data.map(w => ({ ...w, project_name: p.name, project_id: p.id }))
-        )
-      );
-      Promise.all(promises).then(results => {
+    let cancelled = false;
+    setLoading(true);
+    api.get('/projects')
+      .then(res => {
+        if (cancelled) return null;
+        setProjects(res.data);
+        const promises = res.data.map(p =>
+          api.get(`/projects/${p.id}/wbs`).then(wbsRes =>
+            wbsRes.data.map(w => ({ ...w, project_name: p.name, project_id: p.id }))
+          )
+        );
+        return Promise.all(promises);
+      })
+      .then(results => {
+        if (cancelled || !results) return;
         const all = results.flat();
         const mine = all.filter(w => w.assignee_id === user?.id);
         setAllWbs(mine);
+      })
+      .catch(() => {
+        if (!cancelled) message.error('데이터를 불러오지 못했어요');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-    });
+    return () => { cancelled = true; };
   }, [user]);
 
   const filtered = allWbs.filter(w => {
@@ -50,7 +64,7 @@ export default function MyTasks({ user }) {
   const columns = [
     { title: '프로젝트', dataIndex: 'project_name', key: 'project_name', width: 130,
       render: (text, record) => (
-        <a onClick={() => navigate(`/projects/${record.project_id}`)} style={{ fontSize: 12 }}>{text}</a>
+        <a onClick={() => navigate(`/projects/${record.project_id}`, { state: { from: '/my-tasks' } })} style={{ fontSize: 12 }}>{text}</a>
       )
     },
     { title: '구분', dataIndex: 'wbs_number', key: 'wbs_number', width: 70,
@@ -97,7 +111,7 @@ export default function MyTasks({ user }) {
     },
     { title: '바로가기', key: 'action', width: 80,
       render: (_, record) => (
-        <a onClick={() => navigate(`/projects/${record.project_id}/gantt`)} style={{ fontSize: 12 }}>간트차트 →</a>
+        <a onClick={() => navigate(`/projects/${record.project_id}/gantt`, { state: { from: '/my-tasks' } })} style={{ fontSize: 12 }}>간트차트 →</a>
       )
     },
   ];
@@ -171,6 +185,19 @@ export default function MyTasks({ user }) {
           <Text type="secondary" style={{ lineHeight: '32px' }}>총 {filtered.length}건</Text>
         </div>
         <Table dataSource={filtered} columns={columns} rowKey="id" size="small"
+          loading={loading}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  allWbs.length === 0
+                    ? '아직 할당된 업무가 없어요'
+                    : '조건에 맞는 업무가 없어요'
+                }
+              />
+            ),
+          }}
           rowClassName={(record) => {
             if (record.plan_end_date && record.plan_end_date < today && record.status !== '완료') return 'delayed-row';
             return '';

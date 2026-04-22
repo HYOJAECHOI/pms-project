@@ -34,6 +34,8 @@ def _serialize_project(p, db):
         "status": p.status,
         "start_date": str(p.start_date) if p.start_date else None,
         "end_date": str(p.end_date) if p.end_date else None,
+        "original_start_date": str(p.original_start_date) if p.original_start_date else None,
+        "original_end_date":   str(p.original_end_date) if p.original_end_date else None,
         "pm_id": p.pm_id,
         "pm_name": pm_name,
         "organization_id": p.organization_id,
@@ -126,6 +128,7 @@ def create_project(
     project = models.Project(
         name=name, description=description, status=status,
         start_date=start_date, end_date=end_date,
+        original_start_date=start_date, original_end_date=end_date,
         pm_id=pm_id, organization_id=organization_id,
         client=client, budget=budget, bid_deadline=bid_deadline,
         pipeline_stage=pipeline_stage, country=country, proposal_writer=proposal_writer,
@@ -247,8 +250,15 @@ def update_project(
     if name: project.name = name
     if description is not None: project.description = description
     if status: project.status = status
-    if start_date: project.start_date = start_date
-    if end_date: project.end_date = end_date
+    if start_date:
+        project.start_date = start_date
+        # original_start_date는 최초 1회만 저장 (이후 수정/범위 확장에는 보존)
+        if project.original_start_date is None:
+            project.original_start_date = start_date
+    if end_date:
+        project.end_date = end_date
+        if project.original_end_date is None:
+            project.original_end_date = end_date
     if pm_id: project.pm_id = pm_id
     if organization_id is not None: project.organization_id = organization_id
     if client is not None: project.client = client

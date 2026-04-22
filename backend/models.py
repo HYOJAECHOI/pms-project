@@ -30,9 +30,11 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(String)
-    status = Column(String, default="제안")  # 제안/수행/종료
+    status = Column(String, default="제안")  # 프로젝트 상태: 제안/수행/종료
     start_date = Column(Date)
     end_date = Column(Date)
+    original_start_date = Column(Date, nullable=True)  # 최초 계획 시작일 (불변)
+    original_end_date   = Column(Date, nullable=True)  # 최초 계획 종료일 (불변)
     pm_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)  # 임시팀 소속 본부
     client = Column(String, nullable=True)  # 발주기관

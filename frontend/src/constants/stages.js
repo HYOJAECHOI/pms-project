@@ -74,7 +74,7 @@ export const STAGE_COLOR = {
 
 // DnD 드롭 시 이동할 기본 대표 단계
 export const SECTION_TARGET_STAGE = {
-  review:   '본공고',
+  review:   '공고전',
   proposal: '제안계획',
   running:  '수주',
   done:     '완료',

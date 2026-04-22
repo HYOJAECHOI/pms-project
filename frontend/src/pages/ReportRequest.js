@@ -47,7 +47,9 @@ export default function ReportRequest({ user }) {
   const load = () => {
     if (!user?.id) return;
     setLoading(true);
-    Promise.all([loadTasks(), loadReports()]).finally(() => setLoading(false));
+    Promise.all([loadTasks(), loadReports()])
+      .catch(() => message.error('데이터를 불러오지 못했어요'))
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {

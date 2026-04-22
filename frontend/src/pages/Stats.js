@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Typography, Card, Row, Col, Table, Progress, Statistic, Tag, Empty } from 'antd';
+import { Typography, Card, Row, Col, Table, Progress, Statistic, Tag, Empty, message } from 'antd';
 import {
   ProjectOutlined,
   CheckCircleOutlined,
@@ -25,23 +25,29 @@ export default function Stats() {
 
   useEffect(() => {
     let cancelled = false;
-    api.get('/projects').then(async (res) => {
-      const projs = res.data;
-      if (cancelled) return;
-      setProjects(projs);
-
-      const results = await Promise.all(
-        projs.map((p) =>
-          api
-            .get(`/projects/${p.id}/wbs`)
-            .then((r) => r.data.map((it) => ({ ...it, project_id: p.id, project_name: p.name })))
-            .catch(() => [])
-        )
-      );
-      if (cancelled) return;
-      setAllWbs(results.flat());
-      setLoading(false);
-    });
+    setLoading(true);
+    api.get('/projects')
+      .then(async (res) => {
+        const projs = res.data;
+        if (cancelled) return;
+        setProjects(projs);
+        const results = await Promise.all(
+          projs.map((p) =>
+            api
+              .get(`/projects/${p.id}/wbs`)
+              .then((r) => r.data.map((it) => ({ ...it, project_id: p.id, project_name: p.name })))
+              .catch(() => [])
+          )
+        );
+        if (cancelled) return;
+        setAllWbs(results.flat());
+      })
+      .catch(() => {
+        if (!cancelled) message.error('통계 데이터를 불러오지 못했어요');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };

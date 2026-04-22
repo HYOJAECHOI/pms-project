@@ -115,44 +115,26 @@ def approve_report(report_id: int, pm_comment: str = None, db: Session = Depends
     if not wbs:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
 
-    changes = []
     if report.report_type == "진척보고":
         if report.requested_progress is not None:
-            changes.append(f"actual_progress {wbs.actual_progress} → {report.requested_progress}")
             wbs.actual_progress = report.requested_progress
             if wbs.actual_progress > 0 and wbs.status == "대기":
-                changes.append("status 대기 → 진행중")
                 wbs.status = "진행중"
             if wbs.actual_start_date is None:
                 wbs.actual_start_date = date.today()
-                changes.append(f"actual_start_date → {wbs.actual_start_date}")
     elif report.report_type == "일정조정":
         if report.requested_end_date is not None:
-            changes.append(f"plan_end_date {wbs.plan_end_date} → {report.requested_end_date}")
             wbs.plan_end_date = report.requested_end_date
     elif report.report_type == "완료보고":
-        changes.append(f"status {wbs.status} → 완료")
         wbs.status = "완료"
-        changes.append(f"actual_progress {wbs.actual_progress} → 1.0")
         wbs.actual_progress = 1.0
         if wbs.actual_start_date is None:
             wbs.actual_start_date = date.today()
-            changes.append(f"actual_start_date → {wbs.actual_start_date}")
-        new_end = report.requested_end_date or date.today()
-        changes.append(f"actual_end_date {wbs.actual_end_date} → {new_end}")
-        wbs.actual_end_date = new_end
+        wbs.actual_end_date = report.requested_end_date or date.today()
 
     report.status = "승인"
     if pm_comment is not None:
         report.pm_comment = pm_comment
-
-    print(
-        f"[approve_report] report_id={report.id} type={report.report_type} "
-        f"wbs_id={wbs.id}({wbs.wbs_number} {wbs.title}) "
-        f"requester_id={report.requester_id} pm_comment={pm_comment!r} "
-        f"changes=[{', '.join(changes) if changes else '없음'}]",
-        flush=True,
-    )
 
     db.commit()
     db.refresh(report)

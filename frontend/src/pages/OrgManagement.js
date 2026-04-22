@@ -62,10 +62,6 @@ export default function OrgManagement({ user }) {
   const orgUsers = selectedOrg ? users.filter((u) => u.organization_id === selectedOrg.id) : [];
   const unassignedUsers = users.filter((u) => u.organization_id == null || u.organization_id !== selectedOrg?.id);
 
-  useEffect(() => {
-    console.log('[OrgManagement] selectedOrgId changed →', selectedOrgId, '| selectedOrg:', selectedOrg?.name ?? '(none)', '| orgUsers:', orgUsers.length);
-  }, [selectedOrgId, selectedOrg, orgUsers.length]);
-
   if (!isAdmin) {
     return (
       <Result
@@ -224,10 +220,8 @@ export default function OrgManagement({ user }) {
             defaultExpandAll
             selectable={true}
             selectedKeys={selectedOrgId != null ? [String(selectedOrgId)] : []}
-            onSelect={(keys, info) => {
-              console.log('[OrgManagement] Tree onSelect — keys:', keys, 'selected:', info?.selected, 'node:', info?.node?.name);
+            onSelect={(keys) => {
               const nextId = keys.length ? parseInt(keys[0], 10) : null;
-              console.log('[OrgManagement] setting selectedOrgId →', nextId);
               setSelectedOrgId(nextId);
             }}
             showLine={{ showLeafIcon: false }}

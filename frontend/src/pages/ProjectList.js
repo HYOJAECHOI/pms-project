@@ -459,8 +459,14 @@ export default function ProjectList({ user }) {
   const isDelayed = (p) => (wbsDelayMap[p.id] || 0) > 0;
 
   const visibleOrgs = useMemo(() => {
-    if (isExecutive) return orgs;
-    return orgs.filter((o) => o.id === myOrgId);
+    // 최상위(parent_id=null)가 정확히 1개면 그 루트를 숨기고 자식들만 표시.
+    // 그 외(0개 또는 다중 루트)에는 조직 전체를 그대로 노출.
+    const roots = orgs.filter((o) => o.parent_id == null);
+    const scoped = roots.length === 1
+      ? orgs.filter((o) => o.id !== roots[0].id)
+      : orgs;
+    if (isExecutive) return scoped;
+    return scoped.filter((o) => o.id === myOrgId);
   }, [isExecutive, orgs, myOrgId]);
 
   const availableYears = useMemo(() => {
@@ -615,7 +621,7 @@ export default function ProjectList({ user }) {
       p.set('org', String(orgId));
       p.delete('section');
       return p;
-    });
+    }, { state: { from: '/projects' } });
     setDelayedOnly(!!opts.delayedOnly);
     setSearch('');
     setSectionFilters({ review: 'all', proposal: 'all', running: 'all', done: 'all', history: 'all' });
@@ -685,7 +691,7 @@ export default function ProjectList({ user }) {
       <>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <Title level={4} style={{ margin: 0 }}>📂 프로젝트</Title>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/projects/create')}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/projects/create', { state: { from: '/projects' } })}>
             프로젝트 생성
           </Button>
         </div>
@@ -900,7 +906,7 @@ export default function ProjectList({ user }) {
                 return (
                   <List.Item
                     style={{ cursor: 'pointer', padding: '12px 0' }}
-                    onClick={() => { setWarnModalOrg(null); navigate(`/projects/${p.id}`); }}
+                    onClick={() => { setWarnModalOrg(null); navigate(`/projects/${p.id}`, { state: { from: '/projects' } }); }}
                   >
                     <div style={{ width: '100%' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -940,6 +946,9 @@ export default function ProjectList({ user }) {
         user={user}
         onBack={closeTableSection}
         onProjectUpdated={handleProjectUpdated}
+        onCreate={() => navigate(`/projects/create?org=${selectedOrgId}&section=${tableSectionKey}`, {
+          state: { from: `/projects?org=${selectedOrgId}&section=${tableSectionKey}` },
+        })}
       />
     );
   }
@@ -996,7 +1005,13 @@ export default function ProjectList({ user }) {
           </Title>
           <Tag color="blue" style={{ marginRight: 0 }}>{phase2Projects.length}건</Tag>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/projects/create')}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => navigate(`/projects/create?org=${selectedOrgId}`, {
+            state: { from: `/projects?org=${selectedOrgId}` },
+          })}
+        >
           프로젝트 생성
         </Button>
       </div>
@@ -1074,7 +1089,9 @@ export default function ProjectList({ user }) {
                     }))
                   }
                   canDrag={canDrag}
-                  onCardClick={(pid) => navigate(`/projects/${pid}`, { state: { from: '/projects' } })}
+                  onCardClick={(pid) => navigate(`/projects/${pid}`, {
+                    state: { from: `/projects?org=${selectedOrgId}&section=${section.key}` },
+                  })}
                   userId={user?.id}
                   onOpenTable={() => setSearchParams((prev) => {
                   const p = new URLSearchParams(prev);
@@ -1105,7 +1122,9 @@ export default function ProjectList({ user }) {
                   }))
                 }
                 canDrag={canDrag}
-                onCardClick={(pid) => navigate(`/projects/${pid}`, { state: { from: '/projects' } })}
+                onCardClick={(pid) => navigate(`/projects/${pid}`, {
+                  state: { from: `/projects?org=${selectedOrgId}&section=${section.key}` },
+                })}
                 userId={user?.id}
                 onOpenTable={() => setSearchParams((prev) => {
                   const p = new URLSearchParams(prev);

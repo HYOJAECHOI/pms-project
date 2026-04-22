@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Layout, Typography, Button, Select, Card, Tag, message, Tooltip, Modal, Form, Input, InputNumber, DatePicker, Slider, Divider } from 'antd';
+import { Layout, Typography, Button, Select, Card, Tag, message, Tooltip, Modal, Form, Input, InputNumber, DatePicker, Slider, Divider, Spin } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined, UploadOutlined, PlusOutlined, PlusSquareOutlined, MinusSquareOutlined, WarningOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import api from '../api/axios';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 
 const { Content } = Layout;
@@ -49,7 +49,70 @@ const getLevelFromWbsNumber = (wbsNumber) => {
 export default function GanttChart() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const fileInputRef = useRef(null);
+  const [loading, setLoading] = useState(false);
+  const currentUserId = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}').id; } catch { return null; }
+  })();
+
+  // 사업 시작일 범위 확장 확인
+  const confirmExtendProjectStart = (wbsStart) => new Promise((resolve) => {
+    if (!project?.start_date || !wbsStart || wbsStart >= project.start_date) { resolve(false); return; }
+    const diffDays = dayjs(project.start_date).diff(dayjs(wbsStart), 'day');
+    Modal.confirm({
+      title: '사업 시작일 조정',
+      content: `WBS가 사업 시작일보다 ${diffDays}일 앞서 시작해요. 사업 시작일을 ${wbsStart}로 당길까요?`,
+      okText: '당기기',
+      cancelText: '유지',
+      onOk: async () => {
+        try {
+          await api.put(`/projects/${id}`, null, { params: { start_date: wbsStart, user_id: currentUserId } });
+          setProject((prev) => (prev ? { ...prev, start_date: wbsStart } : prev));
+          message.success(`사업 시작일이 ${wbsStart}로 조정됐어요.`);
+          resolve(true);
+        } catch {
+          message.error('사업 시작일 조정에 실패했어요');
+          resolve(false);
+        }
+      },
+      onCancel: () => resolve(false),
+    });
+  });
+
+  // 사업 종료일 범위 확장 확인
+  const confirmExtendProjectEnd = (wbsEnd) => new Promise((resolve) => {
+    if (!project?.end_date || !wbsEnd || wbsEnd <= project.end_date) { resolve(false); return; }
+    const diffDays = dayjs(wbsEnd).diff(dayjs(project.end_date), 'day');
+    Modal.confirm({
+      title: '사업 종료일 조정',
+      content: `WBS가 사업 종료일보다 ${diffDays}일 초과해요. 사업 종료일을 ${wbsEnd}로 연장할까요?`,
+      okText: '연장',
+      cancelText: '유지',
+      onOk: async () => {
+        try {
+          await api.put(`/projects/${id}`, null, { params: { end_date: wbsEnd, user_id: currentUserId } });
+          setProject((prev) => (prev ? { ...prev, end_date: wbsEnd } : prev));
+          message.success(`사업 종료일이 ${wbsEnd}로 조정됐어요.`);
+          resolve(true);
+        } catch {
+          message.error('사업 종료일 조정에 실패했어요');
+          resolve(false);
+        }
+      },
+      onCancel: () => resolve(false),
+    });
+  });
+
+  // WBS 변경 후 project 범위 초과 확인 (plan + actual 모두)
+  const checkProjectRangeOverflow = async ({ planStart, planEnd, actualStart, actualEnd } = {}) => {
+    const starts = [planStart, actualStart].filter(Boolean).sort();
+    const ends   = [planEnd, actualEnd].filter(Boolean).sort();
+    const minStart = starts[0];
+    const maxEnd   = ends[ends.length - 1];
+    if (minStart) await confirmExtendProjectStart(minStart);
+    if (maxEnd)   await confirmExtendProjectEnd(maxEnd);
+  };
 
   const [project, setProject] = useState(null);
   const [wbsItems, setWbsItems] = useState([]);
@@ -86,15 +149,23 @@ export default function GanttChart() {
 }, []);
 
   const fetchAll = async () => {
-    const [projRes, wbsRes, memberRes] = await Promise.all([
-      api.get(`/projects/${id}`),
-      api.get(`/projects/${id}/wbs`),
-      api.get(`/projects/${id}/members`),
-    ]);
-    setProject(projRes.data);
-    setWbsItems(wbsRes.data);
-    setMembers(memberRes.data);
-    return wbsRes.data; // 최신 데이터 반환
+    setLoading(true);
+    try {
+      const [projRes, wbsRes, memberRes] = await Promise.all([
+        api.get(`/projects/${id}`),
+        api.get(`/projects/${id}/wbs`),
+        api.get(`/projects/${id}/members`),
+      ]);
+      setProject(projRes.data);
+      setWbsItems(wbsRes.data);
+      setMembers(memberRes.data);
+      return wbsRes.data; // 최신 데이터 반환
+    } catch (err) {
+      message.error('데이터를 불러오지 못했어요');
+      return [];
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -565,6 +636,12 @@ if (field === 'wbs_number') {
       const planStart = field === 'plan_start_date' ? value : item.plan_start_date;
       const planEnd = field === 'plan_end_date' ? value : item.plan_end_date;
       await checkAndExpandParent(item, planStart, planEnd);
+      await checkProjectRangeOverflow({ planStart, planEnd });
+    }
+    if (field === 'actual_start_date' || field === 'actual_end_date') {
+      const actualStart = field === 'actual_start_date' ? value : item.actual_start_date;
+      const actualEnd   = field === 'actual_end_date'   ? value : item.actual_end_date;
+      await checkProjectRangeOverflow({ actualStart, actualEnd });
     }
 
     setWbsItems(prev => prev.map(w => w.id === item.id ? updated : w));
@@ -604,6 +681,10 @@ if (field === 'wbs_number') {
       params.append('plan_end_date',   currentItem.plan_end_date);
       await api.put(`/wbs/${item.id}?${params.toString()}`);
       await checkAndExpandParent(currentItem, currentItem.plan_start_date, currentItem.plan_end_date);
+      await checkProjectRangeOverflow({
+        planStart: currentItem.plan_start_date,
+        planEnd: currentItem.plan_end_date,
+      });
       message.success('일정 수정됐어요!');
       fetchAll();
     };
@@ -639,6 +720,10 @@ if (field === 'wbs_number') {
     await api.put(`/wbs/${item.id}?${params.toString()}`);
     const latestItems = await fetchAll();
     await recomputeParentActualRange(currentItem, latestItems);
+    await checkProjectRangeOverflow({
+      actualStart: currentItem.actual_start_date,
+      actualEnd: currentItem.actual_end_date,
+    });
     message.success(`진척률: ${Math.round(progress * 100)}% / 상태: ${status}`);
     fetchAll();
   };
@@ -834,10 +919,14 @@ const handleSetGanttDate = async (item, dateType, dateStr) => {
     const planStart = dateType === 'plan_start_date' ? dateStr : item.plan_start_date;
     const planEnd = dateType === 'plan_end_date' ? dateStr : item.plan_end_date;
     await checkAndExpandParent(item, planStart, planEnd);
+    await checkProjectRangeOverflow({ planStart, planEnd });
   }
   if (dateType === 'actual_start_date' || dateType === 'actual_end_date') {
     const latestItems = await fetchAll();
     await recomputeParentActualRange(item, latestItems);
+    const actualStart = dateType === 'actual_start_date' ? dateStr : item.actual_start_date;
+    const actualEnd   = dateType === 'actual_end_date'   ? dateStr : item.actual_end_date;
+    await checkProjectRangeOverflow({ actualStart, actualEnd });
   }
   message.success('날짜가 설정됐어요!');
   fetchAll();
@@ -1074,7 +1163,7 @@ if (col.key === 'wbs_number') return isEditing ? (
 
 return (
   <div onClick={() => { setContextMenu(null); setGanttContextMenu(null); }} style={{ padding: '0' }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${id}`, { state: { tab: 'wbs' } })} style={{ marginBottom: 16 }}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${id}`, { state: { tab: 'wbs', from: location.state?.from } })} style={{ marginBottom: 16 }}>
           프로젝트로 돌아가기
         </Button>
 
@@ -1082,7 +1171,16 @@ return (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div>
               <Title level={4} style={{ margin: 0 }}>{project?.name}</Title>
-              <span style={{ color: '#888', fontSize: 12 }}>{project?.start_date} ~ {project?.end_date}</span>
+              <div style={{ fontSize: 12, color: '#888' }}>
+                <span>현재 기간: {project?.start_date} ~ {project?.end_date}</span>
+                {project?.original_start_date && project?.original_end_date
+                  && (project.original_start_date !== project.start_date
+                    || project.original_end_date !== project.end_date) && (
+                  <span style={{ marginLeft: 12, color: '#bfbfbf' }}>
+                    (원래 기간: {project.original_start_date} ~ {project.original_end_date})
+                  </span>
+                )}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12 }}>간트 셀 너비:</span>
@@ -1104,6 +1202,7 @@ return (
           </div>
         </Card>
 
+<Spin spinning={loading}>
 <div style={{ height: 'calc(100vh - 280px)', border: '1px solid #d9d9d9', borderRadius: 8, overflow: 'auto', background: 'white' }}>
   <div style={{ width: totalWidth, position: 'relative' }}>
 
@@ -1257,6 +1356,7 @@ return (
     })}
   </div>
 </div>
+</Spin>
 
         {/* 행 우클릭 메뉴 */}
         {contextMenu && (

@@ -12,7 +12,16 @@
       "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectList.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectTable.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectDetail.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('OK'\\)\")",
       "Bash(./venv/Scripts/alembic.exe revision *)",
       "Bash(./venv/Scripts/alembic.exe upgrade *)",
-      "Bash(./venv/Scripts/alembic.exe current *)"
+      "Bash(./venv/Scripts/alembic.exe current *)",
+      "Bash(backend/venv/Scripts/python.exe *)",
+      "Bash(venv/Scripts/python.exe fix_roles.py)",
+      "Bash(venv/Scripts/python.exe -c \"from database import SessionLocal; from sqlalchemy import text; db = SessionLocal\\(\\); rows = db.execute\\(text\\('SELECT role, COUNT\\(*\\) FROM users GROUP BY role'\\)\\).fetchall\\(\\); print\\(rows\\); db.close\\(\\)\")",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/Home.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('Home OK'\\)\")",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/App.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('App OK'\\)\")",
+      "Bash(venv/Scripts/python.exe *)",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/components/AppLayout.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('AppLayout OK'\\)\")",
+      "Bash(node -e 'require\\('\\\\''@babel/parser'\\\\''\\).parse\\(require\\('\\\\''fs'\\\\''\\).readFileSync\\('\\\\''__TRACKED_VAR__'\\\\'','\\\\''utf8'\\\\''\\), {sourceType:'\\\\''module'\\\\'', plugins:['\\\\''jsx'\\\\'']}\\); console.log\\('\\\\''__TRACKED_VAR__ OK'\\\\''\\)')",
+      "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/GanttChart.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('GanttChart OK'\\)\")"
     ]
   }
 }
