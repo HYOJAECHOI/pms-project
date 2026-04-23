@@ -5,7 +5,7 @@ import models
 from routers import (
     users, projects, members, wbs, organizations, auth,
     project_files, project_comments, wbs_files,
-    wbs_comments, wbs_instructions, activity_logs,
+    wbs_comments, wbs_instructions, activity_logs, work_plans,
 )
 from routers.auth import auth_middleware
 
@@ -41,6 +41,7 @@ app.include_router(wbs_files.router)
 app.include_router(wbs_comments.router)
 app.include_router(wbs_instructions.router)
 app.include_router(activity_logs.router)
+app.include_router(work_plans.router)
 
 @app.get("/")
 def read_root():

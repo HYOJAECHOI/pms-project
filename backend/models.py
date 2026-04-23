@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Date, DateTime, Float, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Date, DateTime, Float, Boolean, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -202,4 +202,20 @@ class ActivityLog(Base):
     action_type = Column(String, nullable=False)
     before_json = Column(Text, nullable=True)
     after_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkPlan(Base):
+    __tablename__ = "work_plans"
+    __table_args__ = (
+        Index("ix_work_plans_user_date", "user_id", "plan_date"),
+        Index("uq_work_plans_user_wbs_date", "user_id", "wbs_id", "plan_date", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=False)
+    plan_date = Column(Date, nullable=False)
+    status = Column(String, default="planned")  # planned/done/skipped
+    memo = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
