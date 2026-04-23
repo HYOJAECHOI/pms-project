@@ -1,19 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Typography, Card, Table, Tag, Progress, Select, Row, Col, Statistic, Badge,
-  Empty, message, Modal, Button, Space, Collapse,
+  Typography, Card, Tag, Progress, Row, Col, Empty, message, Modal, Button,
+  Space, Collapse, Checkbox, Slider, Input, Tooltip,
 } from 'antd';
-import {
-  ClockCircleOutlined, CheckCircleOutlined, WarningOutlined, FileTextOutlined,
-  ProjectOutlined, ScheduleOutlined, ProfileOutlined,
-} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import WBSDetailModal from '../components/WBSDetailModal';
 
 const { Title, Text } = Typography;
-const statusColors = { '대기': 'default', '진행중': 'blue', '완료': 'green' };
-const levelColors = { 1: 'purple', 2: 'blue', 3: 'cyan', 4: 'green' };
+const { TextArea } = Input;
 
 // WBSAssignee에 내가 포함돼 있으면 내 업무로 간주. 배열이 비어있으면 legacy assignee_id로 판정.
 const isMineWbs = (w, userId) => {
@@ -24,67 +19,41 @@ const isMineWbs = (w, userId) => {
   return w.assignee_id === userId;
 };
 
+const todayISO = () => new Date().toISOString().split('T')[0];
+const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
+
+// D-N 태그: D-0 빨강 / D-1~3 주황 / D-4~7 노랑 / D+ 진한빨강
+const dDayInfo = (planEnd) => {
+  if (!planEnd) return null;
+  const diff = daysBetween(planEnd, todayISO());
+  if (diff < 0) return { text: `D+${-diff}`, color: '#a8071a', background: '#fff1f0' };
+  if (diff === 0) return { text: 'D-0', color: '#ff4d4f', background: '#fff1f0' };
+  if (diff <= 3) return { text: `D-${diff}`, color: '#fa8c16', background: '#fff7e6' };
+  if (diff <= 7) return { text: `D-${diff}`, color: '#d4b106', background: '#fffbe6' };
+  return { text: `D-${diff}`, color: '#595959', background: '#fafafa' };
+};
+
 export default function MyTasks({ user }) {
-  const [allWbs, setAllWbs] = useState([]);
-  const [projects, setProjects] = useState([]);  // 종료 제외된 활성 프로젝트만
-  const [filterStatus, setFilterStatus] = useState(null);
-  const [filterProject, setFilterProject] = useState(null);
+  const [myWbs, setMyWbs] = useState([]);
+  const [projects, setProjects] = useState([]); // 종료 제외된 활성 프로젝트
+  const [myInstructions, setMyInstructions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [navTarget, setNavTarget] = useState(null); // 이동 팝업 대상 WBS
-  const [wbsDetailTarget, setWbsDetailTarget] = useState(null); // 상세 모달 대상 WBS
+
+  const [wbsDetailTarget, setWbsDetailTarget] = useState(null);
   const [wbsDetailMembers, setWbsDetailMembers] = useState([]);
   const [wbsDetailTab, setWbsDetailTab] = useState('기본정보');
-  const [myInstructions, setMyInstructions] = useState([]);
+
+  const [checkedItems, setCheckedItems] = useState({});  // { wbs_id: bool }
+  const [memoOpen, setMemoOpen] = useState(null);         // wbs_id or null
+  const [memoText, setMemoText] = useState('');
+  const [progressEdit, setProgressEdit] = useState({});   // { wbs_id: 0~100 }
+
+  const instructionRef = useRef(null);
+  const todayRef = useRef(null);
+  const projectRef = useRef(null);
   const navigate = useNavigate();
 
-  // 내 앞으로 온 활성 지시사항 조회 (user_id는 백엔드가 토큰에서 추출)
-  useEffect(() => {
-    if (!user?.id) return;
-    let cancelled = false;
-    api.get('/my-instructions')
-      .then(res => { if (!cancelled) setMyInstructions(res.data || []); })
-      .catch(() => { if (!cancelled) setMyInstructions([]); });
-    return () => { cancelled = true; };
-  }, [user]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api.get('/projects')
-      .then(res => {
-        if (cancelled) return null;
-        // 종료된 프로젝트는 WBS/필터 목록 모두에서 제외
-        const activeProjects = (res.data || []).filter(p => p.status !== '종료');
-        setProjects(activeProjects);
-        const promises = activeProjects.map(p =>
-          api.get(`/projects/${p.id}/wbs`).then(wbsRes =>
-            wbsRes.data.map(w => ({
-              ...w,
-              project_name: p.name,
-              project_id: p.id,
-              project_status: p.status,
-            }))
-          )
-        );
-        return Promise.all(promises);
-      })
-      .then(results => {
-        if (cancelled || !results) return;
-        const all = results.flat();
-        const mine = all.filter(w => isMineWbs(w, user?.id));
-        setAllWbs(mine);
-      })
-      .catch(() => {
-        if (!cancelled) message.error('데이터를 불러오지 못했어요');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [user]);
-
-  // 화면 전용 상태 라벨/색상 (GanttChart/ProjectDetail의 getDisplayStatus와 동일 규칙)
-  // actual_end_date가 오늘 이전이면 DB status 무관하게 완료 계열로 표시.
+  // ===== getDisplayStatus (기존 로직 유지) =====
   const getDisplayStatus = (item) => {
     const {
       status,
@@ -93,299 +62,479 @@ export default function MyTasks({ user }) {
       actual_start_date: actualStart,
       actual_end_date: actualEnd,
     } = item || {};
-    const todayStr = new Date().toISOString().split('T')[0];
-    const days = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
-
-    if (actualEnd && actualEnd <= todayStr) {
-      if (planEnd && actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: 'orange' };
-      if (planEnd && actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: 'green' };
+    const t = todayISO();
+    if (actualEnd && actualEnd <= t) {
+      if (planEnd && actualEnd > planEnd) return { text: `완료 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: 'orange' };
+      if (planEnd && actualEnd < planEnd) return { text: `완료 (${daysBetween(planEnd, actualEnd)}일 조기)`, color: 'green' };
       if (planEnd && actualEnd === planEnd) return { text: '완료 (정시)', color: 'green' };
       return { text: '완료', color: 'green' };
     }
-    if (status === '완료') {
-      return { text: '완료', color: 'green' };
-    }
+    if (status === '완료') return { text: '완료', color: 'green' };
     if (status === '진행중') {
-      if (actualEnd && planEnd && actualEnd > planEnd) {
-        return { text: `진행중 (${days(actualEnd, planEnd)}일 초과)`, color: 'red' };
-      }
-      if (!actualEnd && planEnd && planEnd < todayStr) {
-        return { text: `진행중 (${days(todayStr, planEnd)}일 지연)`, color: 'red' };
-      }
-      if (!actualStart && planStart && planStart < todayStr) {
-        return { text: '진행중 (시작 지연)', color: 'orange' };
-      }
+      if (actualEnd && planEnd && actualEnd > planEnd) return { text: `진행중 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: 'red' };
+      if (!actualEnd && planEnd && planEnd < t) return { text: `진행중 (${daysBetween(t, planEnd)}일 지연)`, color: 'red' };
+      if (!actualStart && planStart && planStart < t) return { text: '진행중 (시작 지연)', color: 'orange' };
       return { text: '진행중', color: 'blue' };
     }
     if (status === '대기') {
-      if (planStart && planStart <= todayStr) {
-        return { text: `대기 (시작 지연 ${days(todayStr, planStart)}일)`, color: 'orange' };
-      }
+      if (planStart && planStart <= t) return { text: `대기 (시작 지연 ${daysBetween(t, planStart)}일)`, color: 'orange' };
       return { text: '대기', color: 'default' };
     }
     return { text: status || '-', color: 'default' };
   };
 
-  // 메인 테이블은 완료 제외 (완료는 아래 접기 섹션에만 표시)
-  const filtered = allWbs.filter(w => {
-    if (w.status === '완료') return false;
-    if (filterStatus && w.status !== filterStatus) return false;
-    if (filterProject && w.project_id !== filterProject) return false;
-    return true;
-  });
+  // ===== 데이터 로딩 =====
+  const refreshMyWbs = async () => {
+    try {
+      const res = await api.get('/projects');
+      const activeProjects = (res.data || []).filter(p => p.status !== '종료');
+      setProjects(activeProjects);
+      const promises = activeProjects.map(p =>
+        api.get(`/projects/${p.id}/wbs`).then(wbsRes =>
+          (wbsRes.data || []).map(w => ({
+            ...w, project_name: p.name, project_id: p.id, project_status: p.status,
+          }))
+        ).catch(() => [])
+      );
+      const results = await Promise.all(promises);
+      const all = results.flat();
+      const mine = all.filter(w => isMineWbs(w, user?.id));
+      setMyWbs(mine);
+    } catch {
+      message.error('데이터를 불러오지 못했어요');
+    }
+  };
 
-  const today = new Date().toISOString().split('T')[0];
-  // 지연: plan_end_date 지났고 status !== '완료' + actual_end_date 없어야 함
-  // (상태가 미업데이트라도 실제 종료일이 있으면 제외)
-  const delayed = useMemo(() =>
-    allWbs.filter(w => w.plan_end_date && w.plan_end_date < today && w.status !== '완료' && !w.actual_end_date),
-  [allWbs, today]);
-  const upcoming = useMemo(() =>
-    allWbs.filter(w => {
-      if (!w.plan_end_date || w.status === '완료') return false;
-      const diff = Math.floor((new Date(w.plan_end_date) - new Date()) / 86400000);
+  const refreshMyInstructions = async () => {
+    try {
+      const res = await api.get('/my-instructions');
+      setMyInstructions(res.data || []);
+    } catch {
+      setMyInstructions([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([refreshMyWbs(), refreshMyInstructions()])
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // ===== 파생 =====
+  const today = todayISO();
+
+  const todoList = useMemo(() => {
+    // 오늘 마감 + 이번 주 (0~7일) + 지연된(<오늘) 모든 활성 업무
+    return myWbs
+      .filter(w => {
+        if (w.status === '완료' || w.actual_end_date) return false;
+        if (!w.plan_end_date) return false;
+        const diff = daysBetween(w.plan_end_date, today);
+        return diff <= 7; // 지나간 것도 포함 (diff < 0)
+      })
+      .sort((a, b) => (a.plan_end_date || '').localeCompare(b.plan_end_date || ''));
+  }, [myWbs, today]);
+
+  const todayDueCount = useMemo(
+    () => myWbs.filter(w => w.plan_end_date === today && w.status !== '완료' && !w.actual_end_date).length,
+    [myWbs, today]
+  );
+  const weekDueCount = useMemo(
+    () => myWbs.filter(w => {
+      if (w.status === '완료' || w.actual_end_date || !w.plan_end_date) return false;
+      const diff = daysBetween(w.plan_end_date, today);
       return diff >= 0 && diff <= 7;
-    }),
-  [allWbs]);
-  const inProgress = useMemo(() => allWbs.filter(w => w.status === '진행중'), [allWbs]);
-  const completed  = useMemo(() => allWbs.filter(w => w.status === '완료'), [allWbs]);
+    }).length,
+    [myWbs, today]
+  );
+  const delayedCount = useMemo(
+    () => myWbs.filter(w => w.plan_end_date && w.plan_end_date < today && w.status !== '완료' && !w.actual_end_date).length,
+    [myWbs, today]
+  );
+  // open/acknowledged만 활성 지시로 간주. 카드 카운트와 섹션 목록 공용.
+  const activeInstructions = useMemo(
+    () => myInstructions.filter(i => ['open', 'acknowledged'].includes(i.status)),
+    [myInstructions]
+  );
 
-  // 행 클릭 → 이동 팝업 대상 세팅
-  const openNavModal = (record) => setNavTarget(record);
-  const closeNavModal = () => setNavTarget(null);
-  const goToProject = () => {
-    if (!navTarget) return;
-    navigate(`/projects/${navTarget.project_id}`, { state: { from: '/my-tasks' } });
-    closeNavModal();
+  // 내 참여 프로젝트: 내 WBS가 있거나 내가 PM인 프로젝트 (완료/종료 제외)
+  const myProjectList = useMemo(() => {
+    if (!user?.id) return [];
+    const projectIdsFromWbs = new Set(myWbs.map(w => w.project_id));
+    return projects.filter(p =>
+      p.status !== '완료' && p.status !== '종료' &&
+      (projectIdsFromWbs.has(p.id) || p.pm_id === user.id)
+    );
+  }, [projects, myWbs, user]);
+
+  const wbsByProject = useMemo(() => {
+    const map = {};
+    myWbs.forEach(w => {
+      (map[w.project_id] = map[w.project_id] || []).push(w);
+    });
+    return map;
+  }, [myWbs]);
+
+  const projectAvgProgress = (projectId) => {
+    const list = wbsByProject[projectId] || [];
+    if (list.length === 0) return 0;
+    return Math.round(list.reduce((s, w) => s + (w.actual_progress || 0), 0) / list.length * 100);
   };
-  const goToGantt = () => {
-    if (!navTarget) return;
-    navigate(`/projects/${navTarget.project_id}/gantt`, { state: { from: '/my-tasks' } });
-    closeNavModal();
-  };
-  const openWbsDetail = async () => {
-    if (!navTarget) return;
-    const target = navTarget;
+
+  const completedThisMonth = useMemo(() => {
+    const now = new Date();
+    const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    return myWbs
+      .filter(w => (w.status === '완료' || w.actual_end_date) && w.actual_end_date && w.actual_end_date >= startOfMonth)
+      .sort((a, b) => (b.actual_end_date || '').localeCompare(a.actual_end_date || ''));
+  }, [myWbs]);
+
+  // ===== 상호작용 핸들러 =====
+  const scrollToRef = (ref) => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const openWbsDetailForItem = async (wbs, tab = '기본정보') => {
     try {
-      const res = await api.get(`/projects/${target.project_id}/members`);
+      const res = await api.get(`/projects/${wbs.project_id}/members`);
       setWbsDetailMembers(res.data || []);
     } catch {
       setWbsDetailMembers([]);
     }
-    setWbsDetailTab('기본정보');
-    setWbsDetailTarget(target);
-    closeNavModal();
+    setWbsDetailTab(tab);
+    setWbsDetailTarget(wbs);
   };
 
-  // 지시사항 클릭 → 해당 WBS의 상세 모달을 지시사항 탭으로 오픈
   const openInstructionDetail = async (ins) => {
-    const fromAll = allWbs.find(w => w.id === ins.wbs_id);
+    const fromAll = myWbs.find(w => w.id === ins.wbs_id);
     const wbsItem = fromAll || {
-      id: ins.wbs_id,
-      title: ins.wbs_title,
-      wbs_number: ins.wbs_number,
-      level: ins.wbs_level,
-      project_id: ins.project_id,
-      project_name: ins.project_name,
+      id: ins.wbs_id, title: ins.wbs_title, wbs_number: ins.wbs_number,
+      level: ins.wbs_level, project_id: ins.project_id, project_name: ins.project_name,
     };
-    try {
-      const res = await api.get(`/projects/${ins.project_id}/members`);
-      setWbsDetailMembers(res.data || []);
-    } catch {
-      setWbsDetailMembers([]);
-    }
-    setWbsDetailTab('지시사항');
-    setWbsDetailTarget(wbsItem);
+    openWbsDetailForItem(wbsItem, '지시사항');
   };
+
+  const handleCheck = (wbsId, checked) => {
+    setCheckedItems(prev => ({ ...prev, [wbsId]: checked }));
+    if (checked) {
+      setMemoOpen(wbsId);
+      setMemoText('');
+    } else if (memoOpen === wbsId) {
+      setMemoOpen(null);
+      setMemoText('');
+    }
+  };
+
+  const handleSaveMemo = async (w) => {
+    if (!memoText.trim()) {
+      message.warning('메모를 입력해 주세요');
+      return;
+    }
+    try {
+      await api.post(`/wbs/${w.id}/comments`, null, {
+        params: { content: memoText, comment_type: 'memo', memo_category: 'daily_work' },
+      });
+      message.success('메모가 저장됐어요');
+      setMemoOpen(null);
+      setMemoText('');
+    } catch {
+      message.error('메모 저장 실패');
+    }
+  };
+
+  const handleProgressChange = (wbsId, v) => {
+    setProgressEdit(prev => ({ ...prev, [wbsId]: v }));
+  };
+
+  const handleProgressCommit = (w) => {
+    const newPct = progressEdit[w.id];
+    const oldPct = Math.round((w.actual_progress || 0) * 100);
+    if (newPct === undefined || newPct === oldPct) return;
+    Modal.confirm({
+      title: 'PM에게 보고할까요?',
+      content: `진척률 ${oldPct}% → ${newPct}%로 업데이트돼요.`,
+      okText: '보고',
+      cancelText: '취소',
+      onOk: async () => {
+        const params = { actual_progress: newPct / 100 };
+        // 진척률이 0보다 크고 현재 status가 '대기'이면 진행중으로 전환 + 실제 시작일 기록
+        if (newPct > 0 && w.status === '대기') {
+          params.status = '진행중';
+          if (!w.actual_start_date) params.actual_start_date = today;
+        }
+        try {
+          await api.put(`/wbs/${w.id}`, null, { params });
+          message.success('진척률이 업데이트됐어요');
+          setProgressEdit(prev => { const n = { ...prev }; delete n[w.id]; return n; });
+          await refreshMyWbs();
+        } catch {
+          message.error('업데이트 실패');
+        }
+      },
+      onCancel: () => {
+        setProgressEdit(prev => { const n = { ...prev }; delete n[w.id]; return n; });
+      },
+    });
+  };
+
+  const handleComplete = (w) => {
+    Modal.confirm({
+      title: '이 작업을 완료 처리할까요?',
+      content: `"${w.title}" 작업이 완료 상태로 변경돼요.`,
+      okText: '완료 처리',
+      cancelText: '취소',
+      onOk: async () => {
+        const params = {
+          actual_progress: 1.0,
+          actual_end_date: today,
+          status: '완료',
+        };
+        // 실제 시작일이 없으면 오늘로 기록 (시작도 안 찍힌 채 완료되는 케이스 방지)
+        if (!w.actual_start_date) params.actual_start_date = today;
+        try {
+          await api.put(`/wbs/${w.id}`, null, { params });
+          message.success('완료 처리됐어요');
+          setCheckedItems(prev => { const n = { ...prev }; delete n[w.id]; return n; });
+          if (memoOpen === w.id) { setMemoOpen(null); setMemoText(''); }
+          await refreshMyWbs();
+        } catch {
+          message.error('완료 실패');
+        }
+      },
+    });
+  };
+
   const wbsDetailProject = useMemo(
     () => projects.find(p => p.id === wbsDetailTarget?.project_id) || null,
     [projects, wbsDetailTarget]
   );
-  const refreshAfterWbsUpdate = async () => {
-    if (!wbsDetailTarget || !user?.id) return;
-    try {
-      const res = await api.get(`/projects/${wbsDetailTarget.project_id}/wbs`);
-      setAllWbs(prev => {
-        const others = prev.filter(w => w.project_id !== wbsDetailTarget.project_id);
-        const refreshed = (res.data || [])
-          .filter(w => isMineWbs(w, user.id))
-          .map(w => ({ ...w, project_name: wbsDetailProject?.name, project_id: wbsDetailTarget.project_id, project_status: wbsDetailProject?.status }));
-        return [...others, ...refreshed];
-      });
-    } catch { /* ignore */ }
+
+  const onModalUpdate = async () => {
+    await refreshMyWbs();
+    await refreshMyInstructions();
   };
 
-  const columns = [
-    { title: '프로젝트', dataIndex: 'project_name', key: 'project_name', width: 130,
-      render: (text) => <Text style={{ fontSize: 12 }}>{text}</Text>,
-    },
-    { title: '구분', dataIndex: 'wbs_number', key: 'wbs_number', width: 70,
-      render: (num, record) => (
-        <span>
-          <Tag color={levelColors[record.level]} style={{ fontSize: 9, padding: '0 3px', marginRight: 2 }}>{record.level}L</Tag>
-          {num}
-        </span>
-      ),
-    },
-    { title: '작업명', dataIndex: 'title', key: 'title',
-      render: (text, record) => (
-        <span style={{ paddingLeft: (record.level - 1) * 12, fontWeight: record.level === 1 ? 'bold' : 'normal' }}>
-          {text}
-        </span>
-      ),
-    },
-    { title: '상태', key: 'status', width: 140,
-      render: (_, record) => {
-        const ds = getDisplayStatus(record);
-        return <Tag color={ds.color}>{ds.text}</Tag>;
-      },
-    },
-    { title: '계획 시작일', dataIndex: 'plan_start_date', key: 'plan_start_date', width: 100,
-      render: (d) => <Text style={{ fontSize: 11 }}>{d || '-'}</Text>,
-    },
-    { title: '계획 완료일', dataIndex: 'plan_end_date', key: 'plan_end_date', width: 100,
-      render: (d, record) => {
-        if (!d) return <Text style={{ fontSize: 11 }}>-</Text>;
-        const isDelayed = d < today && record.status !== '완료';
-        const isUpcoming = !isDelayed && Math.floor((new Date(d) - new Date()) / 86400000) <= 7 && record.status !== '완료';
-        return (
-          <Text style={{ fontSize: 11, color: isDelayed ? '#ff4d4f' : isUpcoming ? '#faad14' : 'inherit', fontWeight: isDelayed || isUpcoming ? 'bold' : 'normal' }}>
-            {d} {isDelayed ? '⚠' : isUpcoming ? '⏰' : ''}
-          </Text>
-        );
-      },
-    },
-    { title: '진척률', key: 'progress', width: 130,
-      render: (_, record) => (
-        <Progress
-          percent={Math.round((record.actual_progress || 0) * 100)}
-          size="small"
-          status={record.actual_progress >= 1 ? 'success' : record.plan_end_date < today && record.status !== '완료' ? 'exception' : 'active'}
-        />
-      ),
-    },
+  // ===== 렌더 =====
+  const renderTodoItem = (w) => {
+    const dday = dDayInfo(w.plan_end_date);
+    const isChecked = !!checkedItems[w.id];
+    const pct = progressEdit[w.id] ?? Math.round((w.actual_progress || 0) * 100);
+    return (
+      <div key={w.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px' }}>
+          <Checkbox checked={isChecked} onChange={(e) => handleCheck(w.id, e.target.checked)} />
+          <div
+            style={{ flex: 1, cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+            onClick={() => openWbsDetailForItem(w)}
+            title="클릭: 상세 모달"
+          >
+            <strong style={{ fontSize: 13 }}>{w.title}</strong>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>· {w.project_name}</Text>
+          </div>
+          {dday && (
+            <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color, fontWeight: 600 }}>
+              {dday.text}
+            </Tag>
+          )}
+          <div style={{ width: 140 }}>
+            <Tooltip title={`진척률 ${pct}% (드래그 후 놓으면 PM 보고)`}>
+              <Slider
+                min={0} max={100} step={5}
+                value={pct}
+                onChange={(v) => handleProgressChange(w.id, v)}
+                onChangeComplete={() => handleProgressCommit(w)}
+                tooltip={{ formatter: (v) => `${v}%` }}
+              />
+            </Tooltip>
+          </div>
+          <Button size="small" type="primary" onClick={() => handleComplete(w)}>완료</Button>
+        </div>
+        {memoOpen === w.id && (
+          <div style={{ padding: '4px 4px 12px 32px', background: '#fafafa' }}>
+            <TextArea
+              rows={1} autoSize={{ minRows: 1, maxRows: 3 }}
+              placeholder={`"${w.title}" 오늘 무슨 일을 했나요?`}
+              value={memoText}
+              onChange={(e) => setMemoText(e.target.value)}
+              style={{ marginBottom: 6 }}
+            />
+            <Space>
+              <Button size="small" type="primary" onClick={() => handleSaveMemo(w)}>저장</Button>
+              <Button size="small" onClick={() => { setMemoOpen(null); setMemoText(''); }}>닫기</Button>
+            </Space>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const summaryCardStyle = { cursor: 'pointer' };
+  const summaryCards = [
+    { key: 'today', title: '🔴 오늘 마감', value: todayDueCount, color: '#ff4d4f', targetRef: todayRef },
+    { key: 'week',  title: '🟡 이번 주 마감', value: weekDueCount, color: '#fa8c16', targetRef: todayRef },
+    { key: 'ins',   title: '📬 새 지시사항', value: activeInstructions.length, color: '#1677ff', targetRef: instructionRef },
+    { key: 'delay', title: '⚠️ 지연 중', value: delayedCount, color: '#a8071a', targetRef: todayRef },
   ];
 
   return (
     <>
       <Title level={4} style={{ marginBottom: 16 }}>📌 내 업무</Title>
 
-      {/* 통계 카드 */}
+      {/* 1. 요약 카드 */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={6}>
-          <Card>
-            <Statistic title="전체 할당 업무" value={allWbs.length} prefix={<FileTextOutlined />} valueStyle={{ color: '#1677ff' }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="진행중" value={inProgress.length} prefix={<ClockCircleOutlined />} valueStyle={{ color: '#faad14' }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Badge count={upcoming.length} offset={[8, 0]}>
-              <Statistic title="마감 임박 (7일)" value={upcoming.length} prefix={<WarningOutlined />} valueStyle={{ color: '#fa8c16' }} />
-            </Badge>
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="지연" value={delayed.length} prefix={<WarningOutlined />} valueStyle={{ color: '#ff4d4f' }} />
-          </Card>
-        </Col>
+        {summaryCards.map(c => (
+          <Col span={6} key={c.key}>
+            <Card hoverable style={summaryCardStyle} onClick={() => scrollToRef(c.targetRef)}>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{c.title}</div>
+              <div style={{ fontSize: 28, fontWeight: 600, color: c.color }}>{c.value}</div>
+            </Card>
+          </Col>
+        ))}
       </Row>
 
-      {/* 새 지시사항 (open/acknowledged/in_progress) */}
-      {myInstructions.length > 0 && (
-        <Card style={{ marginBottom: 16, borderColor: '#fa8c16', background: '#fff7e6' }}>
-          <Title level={5} style={{ color: '#fa8c16', margin: 0, marginBottom: 8 }}>
-            📢 새 지시사항 ({myInstructions.length}건)
-          </Title>
-          {myInstructions.map(ins => {
-            const priColor = { low: 'default', normal: 'blue', high: 'orange', urgent: 'red' }[ins.priority] || 'default';
-            const priLabel = { low: '낮음', normal: '보통', high: '높음', urgent: '긴급' }[ins.priority] || ins.priority;
-            const statColor = { open: 'default', acknowledged: 'blue', in_progress: 'orange' }[ins.status] || 'default';
-            const statLabel = { open: '미확인', acknowledged: '확인', in_progress: '진행중' }[ins.status] || ins.status;
-            return (
-              <div
-                key={ins.receipt_id}
-                style={{ fontSize: 12, marginBottom: 6, cursor: 'pointer' }}
-                onClick={() => openInstructionDetail(ins)}
-              >
-                <Tag color={priColor}>{priLabel}</Tag>
-                <Tag color={statColor}>{statLabel}</Tag>
-                <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
-                  [{ins.project_name}] {ins.wbs_number} {ins.wbs_title}
-                </Text>
-                <strong>{ins.title}</strong>
-                {ins.author_name && (
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-                    · {ins.author_name}
+      {/* 2. 새 지시사항 */}
+      <div ref={instructionRef}>
+        {activeInstructions.length > 0 && (
+          <Card style={{ marginBottom: 16, borderColor: '#1677ff' }}>
+            <Title level={5} style={{ color: '#1677ff', margin: 0, marginBottom: 8 }}>
+              📬 새 지시사항 ({activeInstructions.length}건)
+            </Title>
+            {activeInstructions.map(ins => {
+              const priColor = { low: 'default', normal: 'blue', high: 'orange', urgent: 'red' }[ins.priority] || 'default';
+              const priLabel = { low: '낮음', normal: '보통', high: '높음', urgent: '긴급' }[ins.priority] || ins.priority;
+              const statColor = { open: 'default', acknowledged: 'blue', in_progress: 'orange' }[ins.status] || 'default';
+              const statLabel = { open: '미확인', acknowledged: '확인', in_progress: '진행중' }[ins.status] || ins.status;
+              return (
+                <div
+                  key={ins.receipt_id}
+                  style={{ fontSize: 12, marginBottom: 6, cursor: 'pointer' }}
+                  onClick={() => openInstructionDetail(ins)}
+                >
+                  <Tag color={priColor}>{priLabel}</Tag>
+                  <Tag color={statColor}>{statLabel}</Tag>
+                  <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
+                    [{ins.project_name}] {ins.wbs_number} {ins.wbs_title}
                   </Text>
-                )}
-              </div>
-            );
-          })}
-        </Card>
-      )}
+                  <strong>{ins.title}</strong>
+                  {ins.author_name && (
+                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>· {ins.author_name}</Text>
+                  )}
+                </div>
+              );
+            })}
+          </Card>
+        )}
+      </div>
 
-      {/* 지연된 업무 (완료 제외) */}
-      {delayed.length > 0 && (
-        <Card style={{ marginBottom: 16, borderColor: '#ff4d4f', background: '#fff2f0' }}>
-          <Title level={5} style={{ color: '#ff4d4f', margin: 0, marginBottom: 8 }}>⚠️ 지연된 업무 ({delayed.length}건)</Title>
-          {delayed.map(w => {
-            const ds = getDisplayStatus(w);
-            return (
-              <div
-                key={w.id}
-                style={{ fontSize: 12, marginBottom: 4, cursor: 'pointer' }}
-                onClick={() => openNavModal(w)}
-              >
-                <Tag color="red">{w.project_name}</Tag>
-                <Tag color={ds.color}>{ds.text}</Tag>
-                <strong>{w.title}</strong> - 완료 예정: {w.plan_end_date}
-              </div>
-            );
-          })}
+      {/* 3. 오늘의 할일 */}
+      <div ref={todayRef}>
+        <Card
+          title={<span>🎯 오늘의 할일 ({todoList.length}건)</span>}
+          style={{ marginBottom: 16 }}
+          loading={loading && myWbs.length === 0}
+        >
+          {todoList.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="오늘 할 일이 없어요" />
+          ) : (
+            todoList.map(renderTodoItem)
+          )}
         </Card>
-      )}
+      </div>
 
-      {/* 마감 임박 */}
-      {upcoming.length > 0 && (
-        <Card style={{ marginBottom: 16, borderColor: '#faad14', background: '#fffbe6' }}>
-          <Title level={5} style={{ color: '#faad14', margin: 0, marginBottom: 8 }}>⏰ 마감 임박 업무 ({upcoming.length}건)</Title>
-          {upcoming.map(w => (
-            <div
-              key={w.id}
-              style={{ fontSize: 12, marginBottom: 4, cursor: 'pointer' }}
-              onClick={() => openNavModal(w)}
-            >
-              <Tag color="orange">{w.project_name}</Tag>
-              <strong>{w.title}</strong> - 완료 예정: {w.plan_end_date}
-            </div>
-          ))}
+      {/* 4. 내 프로젝트 현황 */}
+      <div ref={projectRef}>
+        <Card
+          title={<span>🗂 내 프로젝트 현황 ({myProjectList.length}개)</span>}
+          style={{ marginBottom: 16 }}
+        >
+          {myProjectList.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="참여 중인 프로젝트가 없어요" />
+          ) : (
+            <Collapse
+              items={myProjectList.map(p => {
+                const wbsList = wbsByProject[p.id] || [];
+                const avg = projectAvgProgress(p.id);
+                return {
+                  key: String(p.id),
+                  label: (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+                      <strong
+                        style={{ cursor: 'pointer', color: '#1677ff' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/projects/${p.id}`, { state: { from: '/my-tasks' } });
+                        }}
+                      >
+                        {p.name}
+                      </strong>
+                      {p.pipeline_stage && <Tag color="blue">{p.pipeline_stage}</Tag>}
+                      <Text type="secondary" style={{ fontSize: 12 }}>내 작업 {wbsList.length}개</Text>
+                      <div style={{ flex: 1, minWidth: 120, maxWidth: 240 }}>
+                        <Progress percent={avg} size="small" />
+                      </div>
+                    </div>
+                  ),
+                  children: wbsList.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="할당된 WBS가 없어요" />
+                  ) : (
+                    <div>
+                      {wbsList.map(w => {
+                        const ds = getDisplayStatus(w);
+                        const dday = dDayInfo(w.plan_end_date);
+                        return (
+                          <div
+                            key={w.id}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 12,
+                              padding: '8px 4px', borderBottom: '1px solid #f5f5f5', cursor: 'pointer',
+                            }}
+                            onClick={() => openWbsDetailForItem(w)}
+                          >
+                            <span style={{ flex: 1, fontSize: 13 }}>
+                              <strong>{w.title}</strong>
+                              {w.wbs_number && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{w.wbs_number}</Text>}
+                            </span>
+                            <Tag color={ds.color}>{ds.text}</Tag>
+                            {dday && (
+                              <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color }}>
+                                {dday.text}
+                              </Tag>
+                            )}
+                            <div style={{ width: 100 }}>
+                              <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ),
+                };
+              })}
+            />
+          )}
         </Card>
-      )}
+      </div>
 
-      {/* 완료된 업무 (접기/펼치기) */}
-      {completed.length > 0 && (
+      {/* 5. 완료된 할일 (이번 달) */}
+      {completedThisMonth.length > 0 && (
         <Collapse
           style={{ marginBottom: 16 }}
           items={[{
             key: 'done',
             label: (
               <span style={{ color: '#52c41a' }}>
-                ✅ 완료된 업무 ({completed.length}건)
+                ✅ 이번 달 완료된 할일 ({completedThisMonth.length}건)
               </span>
             ),
             children: (
               <div>
-                {completed.map(w => (
+                {completedThisMonth.map(w => (
                   <div
                     key={w.id}
                     style={{ fontSize: 12, marginBottom: 4, cursor: 'pointer' }}
-                    onClick={() => openNavModal(w)}
+                    onClick={() => openWbsDetailForItem(w)}
                   >
                     <Tag color="green">{w.project_name}</Tag>
                     <strong>{w.title}</strong>
@@ -398,99 +547,6 @@ export default function MyTasks({ user }) {
         />
       )}
 
-      {/* 필터 + 테이블 */}
-      <Card>
-        <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-          <Select placeholder="상태 필터" style={{ width: 120 }} allowClear onChange={setFilterStatus}>
-            <Select.Option value="대기">대기</Select.Option>
-            <Select.Option value="진행중">진행중</Select.Option>
-          </Select>
-          <Select placeholder="프로젝트 필터" style={{ width: 200 }} allowClear onChange={setFilterProject}>
-            {projects.map(p => <Select.Option key={p.id} value={p.id}>{p.name}</Select.Option>)}
-          </Select>
-          <Text type="secondary" style={{ lineHeight: '32px' }}>총 {filtered.length}건</Text>
-          <Text type="secondary" style={{ lineHeight: '32px', marginLeft: 'auto', fontSize: 11 }}>
-            💡 행을 클릭하면 이동할 화면을 선택할 수 있어요
-          </Text>
-        </div>
-        <Table
-          dataSource={filtered}
-          columns={columns}
-          rowKey="id"
-          size="small"
-          loading={loading}
-          onRow={(record) => ({
-            onClick: () => openNavModal(record),
-            style: { cursor: 'pointer' },
-          })}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  allWbs.length === 0
-                    ? '아직 할당된 업무가 없어요'
-                    : '조건에 맞는 업무가 없어요'
-                }
-              />
-            ),
-          }}
-          rowClassName={(record) => {
-            if (record.plan_end_date && record.plan_end_date < today && record.status !== '완료') return 'delayed-row';
-            return '';
-          }}
-        />
-      </Card>
-
-      {/* 이동 팝업 */}
-      <Modal
-        open={!!navTarget}
-        onCancel={closeNavModal}
-        title="어디로 이동할까요?"
-        footer={null}
-        width={440}
-        destroyOnClose
-      >
-        {navTarget && (
-          <>
-            <div style={{ marginBottom: 12, padding: '12px', background: '#fafafa', borderRadius: 6 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>프로젝트</div>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>{navTarget.project_name}</div>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>WBS</div>
-              <div>
-                <Tag color={levelColors[navTarget.level]} style={{ fontSize: 10 }}>{navTarget.level}L</Tag>
-                {navTarget.wbs_number && <Text type="secondary" style={{ marginRight: 6 }}>{navTarget.wbs_number}</Text>}
-                <strong>{navTarget.title}</strong>
-              </div>
-            </div>
-            <Space direction="vertical" style={{ width: '100%' }} size={8}>
-              <Button
-                type="primary"
-                icon={<ProfileOutlined />}
-                block
-                onClick={openWbsDetail}
-              >
-                📋 업무 상세
-              </Button>
-              <Button
-                icon={<ProjectOutlined />}
-                block
-                onClick={goToProject}
-              >
-                🗂 프로젝트 상세
-              </Button>
-              <Button
-                icon={<ScheduleOutlined />}
-                block
-                onClick={goToGantt}
-              >
-                📅 간트차트
-              </Button>
-            </Space>
-          </>
-        )}
-      </Modal>
-
       {/* WBS 상세 모달 */}
       <WBSDetailModal
         visible={!!wbsDetailTarget}
@@ -500,15 +556,7 @@ export default function MyTasks({ user }) {
         members={wbsDetailMembers}
         defaultTab={wbsDetailTab}
         onClose={() => setWbsDetailTarget(null)}
-        onUpdate={async () => {
-          await refreshAfterWbsUpdate();
-          if (user?.id) {
-            try {
-              const res = await api.get('/my-instructions');
-              setMyInstructions(res.data || []);
-            } catch { /* ignore */ }
-          }
-        }}
+        onUpdate={onModalUpdate}
       />
     </>
   );
