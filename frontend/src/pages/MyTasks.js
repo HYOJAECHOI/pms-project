@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Typography, Card, Tag, Progress, Row, Col, Empty, message, Modal, Button,
-  Space, Collapse, Checkbox, Slider, Input, Tooltip,
+  Typography, Card, Tag, Progress, Row, Col, Empty, message, Button,
+  Space, Collapse, Checkbox, Input,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
@@ -46,8 +46,7 @@ export default function MyTasks({ user }) {
   const [checkedItems, setCheckedItems] = useState({});  // { wbs_id: bool }
   const [memoOpen, setMemoOpen] = useState(null);         // wbs_id or null
   const [memoText, setMemoText] = useState('');
-  const [progressEdit, setProgressEdit] = useState({});   // { wbs_id: 0~100 }
-  const [hoveredId, setHoveredId] = useState(null);       // 할일 카드 hover
+  const [hoveredId, setHoveredId] = useState(null);       // 전체 카드 hover (prefix 키 사용)
 
   const instructionRef = useRef(null);
   const todayRef = useRef(null);
@@ -245,68 +244,6 @@ export default function MyTasks({ user }) {
     }
   };
 
-  const handleProgressChange = (wbsId, v) => {
-    setProgressEdit(prev => ({ ...prev, [wbsId]: v }));
-  };
-
-  const handleProgressCommit = (w) => {
-    const newPct = progressEdit[w.id];
-    const oldPct = Math.round((w.actual_progress || 0) * 100);
-    if (newPct === undefined || newPct === oldPct) return;
-    Modal.confirm({
-      title: 'PM에게 보고할까요?',
-      content: `진척률 ${oldPct}% → ${newPct}%로 업데이트돼요.`,
-      okText: '보고',
-      cancelText: '취소',
-      onOk: async () => {
-        const params = { actual_progress: newPct / 100 };
-        // 진척률이 0보다 크고 현재 status가 '대기'이면 진행중으로 전환 + 실제 시작일 기록
-        if (newPct > 0 && w.status === '대기') {
-          params.status = '진행중';
-          if (!w.actual_start_date) params.actual_start_date = today;
-        }
-        try {
-          await api.put(`/wbs/${w.id}`, null, { params });
-          message.success('진척률이 업데이트됐어요');
-          setProgressEdit(prev => { const n = { ...prev }; delete n[w.id]; return n; });
-          await refreshMyWbs();
-        } catch {
-          message.error('업데이트 실패');
-        }
-      },
-      onCancel: () => {
-        setProgressEdit(prev => { const n = { ...prev }; delete n[w.id]; return n; });
-      },
-    });
-  };
-
-  const handleComplete = (w) => {
-    Modal.confirm({
-      title: '이 작업을 완료 처리할까요?',
-      content: `"${w.title}" 작업이 완료 상태로 변경돼요.`,
-      okText: '완료 처리',
-      cancelText: '취소',
-      onOk: async () => {
-        const params = {
-          actual_progress: 1.0,
-          actual_end_date: today,
-          status: '완료',
-        };
-        // 실제 시작일이 없으면 오늘로 기록 (시작도 안 찍힌 채 완료되는 케이스 방지)
-        if (!w.actual_start_date) params.actual_start_date = today;
-        try {
-          await api.put(`/wbs/${w.id}`, null, { params });
-          message.success('완료 처리됐어요');
-          setCheckedItems(prev => { const n = { ...prev }; delete n[w.id]; return n; });
-          if (memoOpen === w.id) { setMemoOpen(null); setMemoText(''); }
-          await refreshMyWbs();
-        } catch {
-          message.error('완료 실패');
-        }
-      },
-    });
-  };
-
   const wbsDetailProject = useMemo(
     () => projects.find(p => p.id === wbsDetailTarget?.project_id) || null,
     [projects, wbsDetailTarget]
@@ -318,33 +255,31 @@ export default function MyTasks({ user }) {
   };
 
   // ===== 렌더 =====
-  const renderTodoItem = (w) => {
-    const dday = dDayInfo(w.plan_end_date);
-    const isChecked = !!checkedItems[w.id];
-    const isHovered = hoveredId === w.id;
-    const pct = progressEdit[w.id] ?? Math.round((w.actual_progress || 0) * 100);
-
-    // 선택(checked) > hover > 기본 순으로 스타일
-    let cardStyle = {
+  // 공통 hover 카드 스타일 (checked 옵션 지원)
+  const getCardStyle = (hoverKey, checked = false) => {
+    const isHovered = hoveredId === hoverKey;
+    const base = {
       marginBottom: 8,
       cursor: 'pointer',
       transition: 'background-color 0.15s, border-color 0.15s',
     };
-    if (isChecked) {
-      cardStyle = { ...cardStyle, backgroundColor: '#e6f4ff', border: '1px solid #1677ff' };
-    } else if (isHovered) {
-      cardStyle = { ...cardStyle, backgroundColor: '#f0f7ff' };
-    }
+    if (checked) return { ...base, backgroundColor: '#e6f4ff', border: '1px solid #1677ff' };
+    if (isHovered) return { ...base, backgroundColor: '#f0f7ff' };
+    return base;
+  };
 
-    // 내부 상호작용 요소는 카드 onClick과 충돌하지 않도록 stopPropagation
+  const renderTodoItem = (w) => {
+    const dday = dDayInfo(w.plan_end_date);
+    const isChecked = !!checkedItems[w.id];
+    const hoverKey = `todo-${w.id}`;
     const stop = (e) => e.stopPropagation();
 
     return (
       <Card
         key={w.id}
         size="small"
-        style={cardStyle}
-        onMouseEnter={() => setHoveredId(w.id)}
+        style={getCardStyle(hoverKey, isChecked)}
+        onMouseEnter={() => setHoveredId(hoverKey)}
         onMouseLeave={() => setHoveredId(null)}
         onClick={() => openWbsDetailForItem(w)}
       >
@@ -361,20 +296,7 @@ export default function MyTasks({ user }) {
               {dday.text}
             </Tag>
           )}
-          <div style={{ width: 140 }} onClick={stop}>
-            <Tooltip title={`진척률 ${pct}% (드래그 후 놓으면 PM 보고)`}>
-              <Slider
-                min={0} max={100} step={5}
-                value={pct}
-                onChange={(v) => handleProgressChange(w.id, v)}
-                onChangeComplete={() => handleProgressCommit(w)}
-                tooltip={{ formatter: (v) => `${v}%` }}
-              />
-            </Tooltip>
-          </div>
-          <span onClick={stop}>
-            <Button size="small" type="primary" onClick={() => handleComplete(w)}>완료</Button>
-          </span>
+          <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
         </div>
         {memoOpen === w.id && (
           <div
@@ -434,22 +356,28 @@ export default function MyTasks({ user }) {
               const priLabel = { low: '낮음', normal: '보통', high: '높음', urgent: '긴급' }[ins.priority] || ins.priority;
               const statColor = { open: 'default', acknowledged: 'blue', in_progress: 'orange' }[ins.status] || 'default';
               const statLabel = { open: '미확인', acknowledged: '확인', in_progress: '진행중' }[ins.status] || ins.status;
+              const hoverKey = `ins-${ins.receipt_id}`;
               return (
-                <div
+                <Card
                   key={ins.receipt_id}
-                  style={{ fontSize: 12, marginBottom: 6, cursor: 'pointer' }}
+                  size="small"
+                  style={getCardStyle(hoverKey)}
+                  onMouseEnter={() => setHoveredId(hoverKey)}
+                  onMouseLeave={() => setHoveredId(null)}
                   onClick={() => openInstructionDetail(ins)}
                 >
-                  <Tag color={priColor}>{priLabel}</Tag>
-                  <Tag color={statColor}>{statLabel}</Tag>
-                  <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
-                    [{ins.project_name}] {ins.wbs_number} {ins.wbs_title}
-                  </Text>
-                  <strong>{ins.title}</strong>
-                  {ins.author_name && (
-                    <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>· {ins.author_name}</Text>
-                  )}
-                </div>
+                  <div style={{ fontSize: 12 }}>
+                    <Tag color={priColor}>{priLabel}</Tag>
+                    <Tag color={statColor}>{statLabel}</Tag>
+                    <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
+                      [{ins.project_name}] {ins.wbs_number} {ins.wbs_title}
+                    </Text>
+                    <strong>{ins.title}</strong>
+                    {ins.author_name && (
+                      <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>· {ins.author_name}</Text>
+                    )}
+                  </div>
+                </Card>
               );
             })}
           </Card>
@@ -511,29 +439,30 @@ export default function MyTasks({ user }) {
                       {wbsList.map(w => {
                         const ds = getDisplayStatus(w);
                         const dday = dDayInfo(w.plan_end_date);
+                        const hoverKey = `proj-${w.id}`;
                         return (
-                          <div
+                          <Card
                             key={w.id}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: 12,
-                              padding: '8px 4px', borderBottom: '1px solid #f5f5f5', cursor: 'pointer',
-                            }}
+                            size="small"
+                            style={getCardStyle(hoverKey)}
+                            onMouseEnter={() => setHoveredId(hoverKey)}
+                            onMouseLeave={() => setHoveredId(null)}
                             onClick={() => openWbsDetailForItem(w)}
                           >
-                            <span style={{ flex: 1, fontSize: 13 }}>
-                              <strong>{w.title}</strong>
-                              {w.wbs_number && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{w.wbs_number}</Text>}
-                            </span>
-                            <Tag color={ds.color}>{ds.text}</Tag>
-                            {dday && (
-                              <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color }}>
-                                {dday.text}
-                              </Tag>
-                            )}
-                            <div style={{ width: 100 }}>
-                              <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                              <span style={{ flex: 1, fontSize: 13 }}>
+                                <strong>{w.title}</strong>
+                                {w.wbs_number && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{w.wbs_number}</Text>}
+                              </span>
+                              <Tag color={ds.color}>{ds.text}</Tag>
+                              {dday && (
+                                <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color }}>
+                                  {dday.text}
+                                </Tag>
+                              )}
+                              <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
                             </div>
-                          </div>
+                          </Card>
                         );
                       })}
                     </div>
@@ -558,17 +487,25 @@ export default function MyTasks({ user }) {
             ),
             children: (
               <div>
-                {completedThisMonth.map(w => (
-                  <div
-                    key={w.id}
-                    style={{ fontSize: 12, marginBottom: 4, cursor: 'pointer' }}
-                    onClick={() => openWbsDetailForItem(w)}
-                  >
-                    <Tag color="green">{w.project_name}</Tag>
-                    <strong>{w.title}</strong>
-                    {w.actual_end_date && <Text type="secondary"> · 완료일: {w.actual_end_date}</Text>}
-                  </div>
-                ))}
+                {completedThisMonth.map(w => {
+                  const hoverKey = `done-${w.id}`;
+                  return (
+                    <Card
+                      key={w.id}
+                      size="small"
+                      style={getCardStyle(hoverKey)}
+                      onMouseEnter={() => setHoveredId(hoverKey)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      onClick={() => openWbsDetailForItem(w)}
+                    >
+                      <div style={{ fontSize: 12 }}>
+                        <Tag color="green">{w.project_name}</Tag>
+                        <strong>{w.title}</strong>
+                        {w.actual_end_date && <Text type="secondary"> · 완료일: {w.actual_end_date}</Text>}
+                      </div>
+                    </Card>
+                  );
+                })}
               </div>
             ),
           }]}
