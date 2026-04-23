@@ -47,6 +47,7 @@ export default function MyTasks({ user }) {
   const [memoOpen, setMemoOpen] = useState(null);         // wbs_id or null
   const [memoText, setMemoText] = useState('');
   const [progressEdit, setProgressEdit] = useState({});   // { wbs_id: 0~100 }
+  const [hoveredId, setHoveredId] = useState(null);       // 할일 카드 hover
 
   const instructionRef = useRef(null);
   const todayRef = useRef(null);
@@ -128,16 +129,16 @@ export default function MyTasks({ user }) {
   const today = todayISO();
 
   const todoList = useMemo(() => {
-    // 오늘 마감 + 이번 주 (0~7일) + 지연된(<오늘) 모든 활성 업무
+    // 미완료 내 WBS 전부 포함. plan_end_date 오름차순 (지연→오늘→미래), 날짜 없으면 맨 뒤.
     return myWbs
-      .filter(w => {
-        if (w.status === '완료' || w.actual_end_date) return false;
-        if (!w.plan_end_date) return false;
-        const diff = daysBetween(w.plan_end_date, today);
-        return diff <= 7; // 지나간 것도 포함 (diff < 0)
-      })
-      .sort((a, b) => (a.plan_end_date || '').localeCompare(b.plan_end_date || ''));
-  }, [myWbs, today]);
+      .filter(w => w.status !== '완료')
+      .sort((a, b) => {
+        if (!a.plan_end_date && !b.plan_end_date) return 0;
+        if (!a.plan_end_date) return 1;
+        if (!b.plan_end_date) return -1;
+        return a.plan_end_date.localeCompare(b.plan_end_date);
+      });
+  }, [myWbs]);
 
   const todayDueCount = useMemo(
     () => myWbs.filter(w => w.plan_end_date === today && w.status !== '완료' && !w.actual_end_date).length,
@@ -320,16 +321,38 @@ export default function MyTasks({ user }) {
   const renderTodoItem = (w) => {
     const dday = dDayInfo(w.plan_end_date);
     const isChecked = !!checkedItems[w.id];
+    const isHovered = hoveredId === w.id;
     const pct = progressEdit[w.id] ?? Math.round((w.actual_progress || 0) * 100);
+
+    // 선택(checked) > hover > 기본 순으로 스타일
+    let cardStyle = {
+      marginBottom: 8,
+      cursor: 'pointer',
+      transition: 'background-color 0.15s, border-color 0.15s',
+    };
+    if (isChecked) {
+      cardStyle = { ...cardStyle, backgroundColor: '#e6f4ff', border: '1px solid #1677ff' };
+    } else if (isHovered) {
+      cardStyle = { ...cardStyle, backgroundColor: '#f0f7ff' };
+    }
+
+    // 내부 상호작용 요소는 카드 onClick과 충돌하지 않도록 stopPropagation
+    const stop = (e) => e.stopPropagation();
+
     return (
-      <div key={w.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 4px' }}>
-          <Checkbox checked={isChecked} onChange={(e) => handleCheck(w.id, e.target.checked)} />
-          <div
-            style={{ flex: 1, cursor: 'pointer', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
-            onClick={() => openWbsDetailForItem(w)}
-            title="클릭: 상세 모달"
-          >
+      <Card
+        key={w.id}
+        size="small"
+        style={cardStyle}
+        onMouseEnter={() => setHoveredId(w.id)}
+        onMouseLeave={() => setHoveredId(null)}
+        onClick={() => openWbsDetailForItem(w)}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span onClick={stop}>
+            <Checkbox checked={isChecked} onChange={(e) => handleCheck(w.id, e.target.checked)} />
+          </span>
+          <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
             <strong style={{ fontSize: 13 }}>{w.title}</strong>
             <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>· {w.project_name}</Text>
           </div>
@@ -338,7 +361,7 @@ export default function MyTasks({ user }) {
               {dday.text}
             </Tag>
           )}
-          <div style={{ width: 140 }}>
+          <div style={{ width: 140 }} onClick={stop}>
             <Tooltip title={`진척률 ${pct}% (드래그 후 놓으면 PM 보고)`}>
               <Slider
                 min={0} max={100} step={5}
@@ -349,10 +372,15 @@ export default function MyTasks({ user }) {
               />
             </Tooltip>
           </div>
-          <Button size="small" type="primary" onClick={() => handleComplete(w)}>완료</Button>
+          <span onClick={stop}>
+            <Button size="small" type="primary" onClick={() => handleComplete(w)}>완료</Button>
+          </span>
         </div>
         {memoOpen === w.id && (
-          <div style={{ padding: '4px 4px 12px 32px', background: '#fafafa' }}>
+          <div
+            style={{ padding: '8px 4px 4px 32px', marginTop: 8, background: '#fafafa', borderRadius: 4 }}
+            onClick={stop}
+          >
             <TextArea
               rows={1} autoSize={{ minRows: 1, maxRows: 3 }}
               placeholder={`"${w.title}" 오늘 무슨 일을 했나요?`}
@@ -366,7 +394,7 @@ export default function MyTasks({ user }) {
             </Space>
           </div>
         )}
-      </div>
+      </Card>
     );
   };
 
