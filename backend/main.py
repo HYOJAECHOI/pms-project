@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 import models
 from routers import (
-    users, projects, members, wbs, organizations, auth, reports,
+    users, projects, members, wbs, organizations, auth,
     project_files, project_comments, wbs_files,
     wbs_comments, wbs_instructions, activity_logs,
 )
@@ -35,7 +35,6 @@ app.include_router(members.router)
 app.include_router(wbs.router)
 app.include_router(organizations.router)
 app.include_router(auth.router)
-app.include_router(reports.router)
 app.include_router(project_files.router)
 app.include_router(project_comments.router)
 app.include_router(wbs_files.router)

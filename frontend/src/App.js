@@ -13,8 +13,6 @@ import AppLayout from './components/AppLayout';
 import MyTasks from './pages/MyTasks';
 import Stats from './pages/Stats';
 import UserManagement from './pages/UserManagement';
-import ReportRequest from './pages/ReportRequest';
-import ReportReview from './pages/ReportReview';
 import OrgManagement from './pages/OrgManagement';
 
 export default function App() {
@@ -53,8 +51,6 @@ export default function App() {
           <Route path="/my-tasks" element={<MyTasks user={user} />} />
           <Route path="/stats" element={<Stats />} />
           <Route path="/users" element={<UserManagement user={user} />} />
-          <Route path="/reports" element={<ReportRequest user={user} />} />
-          <Route path="/reports/review" element={<ReportReview user={user} />} />
           <Route path="/org-management" element={<OrgManagement user={user} />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

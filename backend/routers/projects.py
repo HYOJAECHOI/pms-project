@@ -375,27 +375,22 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
         models.WBSItem.project_id == project_id
     ).delete(synchronize_session=False)
 
-    # 3) 업무보고
-    db.query(models.WorkReport).filter(
-        models.WorkReport.project_id == project_id
-    ).delete(synchronize_session=False)
-
-    # 4) 프로젝트 코멘트
+    # 3) 프로젝트 코멘트
     db.query(models.ProjectComment).filter(
         models.ProjectComment.project_id == project_id
     ).delete(synchronize_session=False)
 
-    # 5) 프로젝트 파일
+    # 4) 프로젝트 파일
     db.query(models.ProjectFile).filter(
         models.ProjectFile.project_id == project_id
     ).delete(synchronize_session=False)
 
-    # 6) 임시팀 조직이 이 프로젝트를 참조하면 끊어주기 (조직 자체는 유지)
+    # 5) 임시팀 조직이 이 프로젝트를 참조하면 끊어주기 (조직 자체는 유지)
     db.query(models.Organization).filter(
         models.Organization.project_id == project_id
     ).update({models.Organization.project_id: None}, synchronize_session=False)
 
-    # 7) Project 본체
+    # 6) Project 본체
     db.delete(project)
     db.commit()
     return {"message": "프로젝트가 삭제됐어요."}

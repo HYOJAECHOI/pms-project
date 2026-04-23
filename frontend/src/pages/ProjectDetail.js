@@ -1426,19 +1426,6 @@ export default function ProjectDetail() {
     </Card>
   );
 
-  // ─── 탭4: 업무보고 ───
-  const reportTab = (
-    <Card size="small" title="📊 업무보고">
-      <Space direction="vertical" style={{ width: '100%' }} size={12}>
-        <Text type="secondary">이 프로젝트의 진척/일정조정/완료 보고를 작성하거나 검토할 수 있어요.</Text>
-        <Space wrap>
-          <Button type="primary" onClick={() => navigate('/reports')}>보고 요청 작성</Button>
-          <Button onClick={() => navigate('/reports/review')}>보고 검토</Button>
-        </Space>
-      </Space>
-    </Card>
-  );
-
   return (
     <>
       <Button icon={<ArrowLeftOutlined />} onClick={handleGoBack} style={{ marginBottom: 16 }}>
@@ -1498,7 +1485,6 @@ export default function ProjectDetail() {
           { key: 'overview', label: '개요',     children: overviewTab },
           { key: 'wbs',      label: 'WBS/간트', children: wbsTab },
           { key: 'members',  label: '멤버',     children: memberTab },
-          { key: 'reports',  label: '업무보고',  children: reportTab },
         ]}
       />
 

@@ -9,12 +9,16 @@ def main():
     try:
         # ── FK 의존 순서로 자식 테이블부터 삭제 ──
         steps = [
-            (1, 'work_reports',     models.WorkReport),
-            (2, 'wbs_assignees',    models.WBSAssignee),
-            (3, 'wbs_items',        models.WBSItem),
-            (4, 'project_members',  models.ProjectMember),
-            (5, 'project_comments', models.ProjectComment),
-            (6, 'project_files',    models.ProjectFile),
+            (1, 'activity_logs',              models.ActivityLog),
+            (2, 'wbs_instruction_receipts',   models.WBSInstructionReceipt),
+            (3, 'wbs_instructions',           models.WBSInstruction),
+            (4, 'wbs_comments',               models.WBSComment),
+            (5, 'wbs_files',                  models.WBSFile),
+            (6, 'wbs_assignees',              models.WBSAssignee),
+            (7, 'wbs_items',                  models.WBSItem),
+            (8, 'project_members',            models.ProjectMember),
+            (9, 'project_comments',           models.ProjectComment),
+            (10, 'project_files',             models.ProjectFile),
         ]
         for step_no, name, model in steps:
             n = db.query(model).delete(synchronize_session=False)
@@ -25,26 +29,26 @@ def main():
             {models.Organization.project_id: None}, synchronize_session=False
         )
 
-        # 7. projects
+        # 11. projects
         n = db.query(models.Project).delete(synchronize_session=False)
-        print(f"[7] projects 삭제: {n}건")
+        print(f"[11] projects 삭제: {n}건")
 
-        # 8. users (테스트 4개 제외)
+        # 12. users (테스트 4개 제외)
         n = (
             db.query(models.User)
             .filter(~models.User.email.in_(TEST_EMAILS))
             .delete(synchronize_session=False)
         )
-        print(f"[8] users 삭제 (테스트 4개 제외): {n}건")
+        print(f"[12] users 삭제 (테스트 4개 제외): {n}건")
 
         # 테스트 유저의 organization_id dangling FK 정리 → organizations 삭제 전
         db.query(models.User).update(
             {models.User.organization_id: None}, synchronize_session=False
         )
 
-        # 9. organizations
+        # 13. organizations
         n = db.query(models.Organization).delete(synchronize_session=False)
-        print(f"[9] organizations 삭제: {n}건")
+        print(f"[13] organizations 삭제: {n}건")
 
         db.commit()
 

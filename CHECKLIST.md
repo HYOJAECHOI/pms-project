@@ -62,7 +62,6 @@
 - [x] WBS/간트탭: 산출물 파일 목록 (WBSFile 연동, Popover 다운로드)
 - [x] WBS/간트탭: 작업명 클릭 시 WBSDetailModal 오픈
 - [x] 멤버탭: 조직 트리 기반 멤버 추가 모달
-- [ ] 업무보고탭: 보고 목록/작성/승인 UI (현재 이동 버튼만 있음) ⚠️
 - [x] 프로젝트 삭제 후 원래 위치 복귀
 
 ## 📅 간트차트/WBS
@@ -106,12 +105,6 @@
 - [x] PM 강등 차단 + warning
 - [x] PM 삭제 차단 + warning
 
-## 📝 업무 보고
-- [x] 보고 작성 (진척/일정조정/완료)
-- [x] PM 검토/승인/반려
-- [x] 승인 시 WBS 자동 업데이트 + ActivityLog 기록
-- [ ] ProjectDetail 업무보고탭 내장 UI ⚠️
-
 ## 🧭 네비게이션
 - [x] 모든 뒤로가기 state.from 기반
 - [x] 삭제 후 원래 위치 복귀
@@ -120,7 +113,6 @@
 ## 🔐 보안 (프로덕션 전 필수)
 - [ ] JWT secret 환경변수로 이동
 - [ ] /users 엔드포인트 인증 적용
-- [ ] reports.py server-side 인증 적용
 - [ ] 백엔드 PM/PL 권한 가드 (지시사항 작성/수정/삭제)
 - [ ] 프로젝트 멤버십 검사 (타 프로젝트 WBS 접근 차단)
 - [ ] 협업 API enum 검증 (comment_type/priority/status)

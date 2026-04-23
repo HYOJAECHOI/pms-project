@@ -150,24 +150,6 @@ class ProjectComment(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class WorkReport(Base):
-    __tablename__ = "work_reports"
-
-    id = Column(Integer, primary_key=True, index=True)
-    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=False)
-    requester_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    report_type = Column(String, nullable=False)  # 진척보고/일정조정/완료보고
-    current_progress = Column(Float)
-    requested_progress = Column(Float)
-    current_end_date = Column(Date)
-    requested_end_date = Column(Date)
-    memo = Column(String)
-    status = Column(String, default="대기")  # 대기/승인/반려
-    created_at = Column(DateTime, default=datetime.utcnow)
-    pm_comment = Column(String, nullable=True)
-
-
 class WBSComment(Base):
     __tablename__ = "wbs_comments"
 

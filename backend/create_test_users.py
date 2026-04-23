@@ -208,40 +208,6 @@ def ensure_wbs(db, users, project):
     return out
 
 
-def ensure_report(db, users, wbs_items, project):
-    target = wbs_items.get("시스템 설계")
-    requester = users["user@pms.com"]
-    if target is None:
-        print("[REPORT SKIP] WBS '시스템 설계' 없음")
-        return
-    existing = (
-        db.query(models.WorkReport)
-        .filter(
-            models.WorkReport.wbs_id == target.id,
-            models.WorkReport.requester_id == requester.id,
-            models.WorkReport.report_type == "진척보고",
-            models.WorkReport.status == "대기",
-        )
-        .first()
-    )
-    if existing is not None:
-        print(f"[REPORT SKIP] WBS '시스템 설계'에 대한 대기 진척보고 이미 존재 id={existing.id}")
-        return
-    report = models.WorkReport(
-        wbs_id=target.id,
-        requester_id=requester.id,
-        project_id=project.id,
-        report_type="진척보고",
-        current_progress=target.actual_progress,
-        requested_progress=0.8,
-        status="대기",
-        memo="80% 완료 보고드립니다",
-    )
-    db.add(report)
-    db.flush()
-    print(f"[REPORT CREATED] id={report.id} wbs='{target.title}' {target.actual_progress} -> 0.8 (대기)")
-
-
 def main():
     db = SessionLocal()
     try:
@@ -254,9 +220,7 @@ def main():
         print("\n─── 4. 프로젝트 멤버 ──────────────────────")
         ensure_members(db, users, projects)
         print("\n─── 5. WBS (수행중 프로젝트) ──────────────")
-        wbs_items = ensure_wbs(db, users, projects["테스트_수행중프로젝트"])
-        print("\n─── 6. 진척 보고 ──────────────────────────")
-        ensure_report(db, users, wbs_items, projects["테스트_수행중프로젝트"])
+        ensure_wbs(db, users, projects["테스트_수행중프로젝트"])
         db.commit()
         print("\n[DONE] 모든 테스트 데이터 세팅 완료. password=1234")
     except Exception:

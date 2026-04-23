@@ -348,12 +348,7 @@ def delete_wbs_item(item_id: int, db: Session = Depends(get_db)):
         models.WBSFile.wbs_id == item_id
     ).delete(synchronize_session=False)
 
-    # 2) 업무보고
-    db.query(models.WorkReport).filter(
-        models.WorkReport.wbs_id == item_id
-    ).delete(synchronize_session=False)
-
-    # 3) 댓글 (자기참조 FK가 있으므로 parent 참조를 먼저 해제)
+    # 2) 댓글 (자기참조 FK가 있으므로 parent 참조를 먼저 해제)
     db.query(models.WBSComment).filter(
         models.WBSComment.wbs_id == item_id
     ).update({models.WBSComment.parent_comment_id: None}, synchronize_session=False)

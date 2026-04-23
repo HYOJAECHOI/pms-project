@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Typography, Menu, Input, Avatar, Button, AutoComplete, Tag, Tooltip, message } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { DashboardOutlined, UnorderedListOutlined, BarChartOutlined, SearchOutlined, UserOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined, CheckCircleOutlined, TeamOutlined, FileDoneOutlined, AuditOutlined, BankOutlined } from '@ant-design/icons';
+import { DashboardOutlined, UnorderedListOutlined, BarChartOutlined, SearchOutlined, UserOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined, CheckCircleOutlined, TeamOutlined, BankOutlined } from '@ant-design/icons';
 import api from '../api/axios';
 
 const statusColor = { '진행중': 'blue', '완료': 'green', '대기': 'default', '제안': 'geekblue', '수행': 'blue', '종료': 'green', '취소': 'red' };
@@ -65,16 +65,10 @@ export default function AppLayout({ user, onLogout, children }) {
     navigate(`/projects/${value}`, { state: { from: location.pathname + (location.search || '') } });
   };
 
-  // system_role 기준: admin은 모든 권한, manager는 검토 권한, user는 일반 권한
-  const canReview = ['admin', 'manager'].includes(user?.role);
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: '대시보드' },
     { key: '/projects', icon: <UnorderedListOutlined />, label: '프로젝트' },
     { key: '/my-tasks', icon: <CheckCircleOutlined />, label: '내 업무' },
-    { key: '/reports', icon: <FileDoneOutlined />, label: '업무 보고' },
-    ...(canReview
-      ? [{ key: '/reports/review', icon: <AuditOutlined />, label: '보고 검토' }]
-      : []),
     { key: '/stats', icon: <BarChartOutlined />, label: '통계' },
     ...(user?.role === 'admin'
       ? [

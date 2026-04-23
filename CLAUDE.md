@@ -52,8 +52,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 역할은 서로 다른 3개 축으로 관리. 섞어서 쓰지 말 것.
 
 - **system role** (`User.role`, 3가지): `admin` / `manager` / `user`
-  - `admin`: 전체 관리 (유저/조직 관리, 모든 보고 검토 가능)
-  - `manager`: 검토 권한 (본인이 PM인 프로젝트의 보고 검토)
+  - `admin`: 전체 관리 (유저/조직 관리)
+  - `manager`: 본부장급 (본부 프로젝트 현황 열람, 향후 이슈/대시보드 권한 담당)
   - `user`: 일반 사용자
   - 프론트 표시 라벨: `admin→관리자` / `manager→매니저` / `user→일반`
 - **position** (`User.position`, 직위): `사장` / `부사장` / `본부장` / `이사` / `수석` / `책임` / `대리` / `사원` / `연구원`
@@ -86,7 +86,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 내 업무 = WBS에 할당된 작업을 개인이 실행하는 공간. 같은 데이터, 다른 렌즈.
 - 역할별 관점:
   - 사원: 할당된 WBS 작업 실행 / 메모 남기기 / 지시 이행
-  - PM: 담당 프로젝트 WBS 조율 / 지시 발행 / 보고 검토
+  - PM: 담당 프로젝트 WBS 조율 / 지시 발행 / 진척 확인
   - 본부장: 본부 전체 현황 파악 / 이슈 중심 의사결정
 - 보고 철학: 평소 꾸준한 기록을 AI가 자동으로 요약해 보고 생성 (2단계 목표)
 - `WBSDetailModal`은 간트차트와 내 업무 양쪽에서 동일하게 사용 — 진입 지점만 다를 뿐 같은 UI/동작
