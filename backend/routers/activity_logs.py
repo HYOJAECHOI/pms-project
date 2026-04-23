@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from database import get_db
 import models
@@ -65,7 +65,14 @@ def _build_user_map(logs, db: Session):
 
 
 @router.get("/wbs/{wbs_id}/activities")
-def list_wbs_activities(wbs_id: int, db: Session = Depends(get_db)):
+def list_wbs_activities(wbs_id: int, request: Request, db: Session = Depends(get_db)):
+    # 순환 import 회피: 함수 내부에서 지연 import
+    from routers.dependencies import require_project_member
+    wbs = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
+    if not wbs:
+        raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+    require_project_member(wbs.project_id, extract_user_id(request), db)
+
     logs = (
         db.query(models.ActivityLog)
         .filter(models.ActivityLog.wbs_id == wbs_id)
@@ -77,7 +84,10 @@ def list_wbs_activities(wbs_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/projects/{project_id}/activities")
-def list_project_activities(project_id: int, db: Session = Depends(get_db)):
+def list_project_activities(project_id: int, request: Request, db: Session = Depends(get_db)):
+    from routers.dependencies import require_project_member
+    require_project_member(project_id, extract_user_id(request), db)
+
     logs = (
         db.query(models.ActivityLog)
         .filter(models.ActivityLog.project_id == project_id)

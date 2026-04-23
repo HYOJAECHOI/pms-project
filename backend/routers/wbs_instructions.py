@@ -5,8 +5,13 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models
 from routers.activity_logs import extract_user_id, log_activity
+from routers.dependencies import require_project_member, require_pm_or_pl
 
 router = APIRouter()
+
+# 입력값 허용 enum
+PRIORITIES = {"low", "normal", "high", "urgent"}
+RECEIPT_STATUSES = {"open", "acknowledged", "in_progress", "completed", "cancelled"}
 
 
 def _parse_user_ids(value):
@@ -96,12 +101,18 @@ def create_instruction(
 ):
     if not title or not title.strip():
         raise HTTPException(status_code=400, detail="제목을 입력해 주세요.")
+    if priority not in PRIORITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"priority는 {sorted(PRIORITIES)} 중 하나여야 해요.",
+        )
 
     wbs = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
     if not wbs:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
 
     actor_user_id = extract_user_id(request)
+    require_pm_or_pl(wbs.project_id, actor_user_id, db)
 
     now = datetime.utcnow()
     ins = models.WBSInstruction(
@@ -239,7 +250,12 @@ def list_my_instructions(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/wbs/{wbs_id}/instructions")
-def list_instructions(wbs_id: int, db: Session = Depends(get_db)):
+def list_instructions(wbs_id: int, request: Request, db: Session = Depends(get_db)):
+    wbs = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
+    if not wbs:
+        raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+    require_project_member(wbs.project_id, extract_user_id(request), db)
+
     instructions = (
         db.query(models.WBSInstruction)
         .filter(models.WBSInstruction.wbs_id == wbs_id)
@@ -263,6 +279,13 @@ def update_instruction(
     ins = db.query(models.WBSInstruction).filter(models.WBSInstruction.id == instruction_id).first()
     if not ins:
         raise HTTPException(status_code=404, detail="지시를 찾을 수 없어요.")
+
+    require_pm_or_pl(ins.project_id, extract_user_id(request), db)
+    if priority is not None and priority not in PRIORITIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"priority는 {sorted(PRIORITIES)} 중 하나여야 해요.",
+        )
 
     before = {"title": ins.title, "content": ins.content, "priority": ins.priority}
     changed = False
@@ -304,6 +327,8 @@ def delete_instruction(instruction_id: int, request: Request, db: Session = Depe
     if not ins:
         raise HTTPException(status_code=404, detail="지시를 찾을 수 없어요.")
 
+    require_pm_or_pl(ins.project_id, extract_user_id(request), db)
+
     db.query(models.WBSInstructionReceipt).filter(
         models.WBSInstructionReceipt.instruction_id == instruction_id
     ).delete(synchronize_session=False)
@@ -337,6 +362,12 @@ def update_receipt(
         raise HTTPException(status_code=401, detail="인증이 필요해요.")
     if caller_id != user_id:
         raise HTTPException(status_code=403, detail="본인의 수신 항목만 변경할 수 있어요.")
+
+    if status is not None and status not in RECEIPT_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status는 {sorted(RECEIPT_STATUSES)} 중 하나여야 해요.",
+        )
 
     receipt = (
         db.query(models.WBSInstructionReceipt)

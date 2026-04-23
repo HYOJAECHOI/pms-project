@@ -5,8 +5,14 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models
 from routers.activity_logs import extract_user_id, log_activity
+from routers.dependencies import require_project_member
 
 router = APIRouter()
+
+# 입력값 허용 enum
+# 'auto'는 시스템 내부 전용이라 사용자 POST에서 제외
+COMMENT_TYPES = {"memo", "question", "answer", "progress_note"}
+MEMO_CATEGORIES = {"daily_work", "issue", "next_action", "reference"}
 
 
 def _serialize(c, user_map, parent_map):
@@ -49,9 +55,25 @@ def create_wbs_comment(
     if not content or not content.strip():
         raise HTTPException(status_code=400, detail="내용을 입력해 주세요.")
 
+    # enum 검증
+    if comment_type not in COMMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"comment_type은 {sorted(COMMENT_TYPES)} 중 하나여야 해요.",
+        )
+    if memo_category is not None and memo_category not in MEMO_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"memo_category는 {sorted(MEMO_CATEGORIES)} 중 하나여야 해요.",
+        )
+
     wbs = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
     if not wbs:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+
+    # 프로젝트 멤버십 검사
+    actor_user_id_for_check = extract_user_id(request)
+    require_project_member(wbs.project_id, actor_user_id_for_check, db)
 
     if parent_comment_id is not None:
         parent = db.query(models.WBSComment).filter(models.WBSComment.id == parent_comment_id).first()
@@ -112,7 +134,12 @@ def create_wbs_comment(
 
 
 @router.get("/wbs/{wbs_id}/comments")
-def list_wbs_comments(wbs_id: int, db: Session = Depends(get_db)):
+def list_wbs_comments(wbs_id: int, request: Request, db: Session = Depends(get_db)):
+    wbs = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
+    if not wbs:
+        raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+    require_project_member(wbs.project_id, extract_user_id(request), db)
+
     comments = (
         db.query(models.WBSComment)
         .filter(models.WBSComment.wbs_id == wbs_id)
@@ -146,6 +173,7 @@ def delete_wbs_comment(comment_id: int, request: Request, db: Session = Depends(
         raise HTTPException(status_code=404, detail="댓글을 찾을 수 없어요.")
 
     actor_user_id = extract_user_id(request)
+    require_project_member(comment.project_id, actor_user_id, db)
     if comment.user_id is None or comment.user_id != actor_user_id:
         raise HTTPException(status_code=403, detail="본인의 댓글만 삭제할 수 있어요.")
 

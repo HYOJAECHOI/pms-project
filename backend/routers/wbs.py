@@ -6,6 +6,7 @@ from database import SessionLocal
 from datetime import date
 import models
 from routers.activity_logs import extract_user_id, log_activity
+from routers.dependencies import require_project_member
 
 UPLOAD_ROOT_ABS = os.path.abspath(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
@@ -207,10 +208,12 @@ def get_wbs(project_id: int, db: Session = Depends(get_db)):
 
 # WBS 단일 조회 (상세 모달 등에서 최신 데이터 fetch용)
 @router.get("/wbs/{wbs_id}")
-def get_wbs_item(wbs_id: int, db: Session = Depends(get_db)):
+def get_wbs_item(wbs_id: int, request: Request, db: Session = Depends(get_db)):
     item = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+
+    require_project_member(item.project_id, extract_user_id(request), db)
 
     assignees = _list_assignees(item.id, db)
     if not assignees and item.assignee_id:

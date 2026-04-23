@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button, Table, Tag, Typography, Card, Progress, Row, Col, Statistic, Tabs,
   Descriptions, Upload, Input, InputNumber, Select, DatePicker, Switch, Divider,
-  List, Avatar, Empty, Space, Tooltip, Popconfirm, message, Modal, Spin,
+  List, Avatar, Empty, Space, Tooltip, Popconfirm, message, Modal, Spin, Popover,
 } from 'antd';
+import { Resizable } from 'react-resizable';
+import 'react-resizable/css/styles.css';
 import {
   ArrowLeftOutlined, EditOutlined, TeamOutlined, UploadOutlined,
   DeleteOutlined, FileOutlined, SendOutlined, RobotOutlined, UserOutlined,
-  SaveOutlined, CloseOutlined, LinkOutlined,
+  SaveOutlined, CloseOutlined, LinkOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import api from '../api/axios';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
@@ -24,6 +26,23 @@ const { RangePicker } = DatePicker;
 
 const levelColors = { 1: 'purple', 2: 'blue', 3: 'cyan', 4: 'green' };
 const statusColors = { '대기': 'default', '진행중': 'orange', '완료': 'green' };
+
+// 컬럼 헤더 리사이즈 가능하게 감싸는 <th>.
+// react-resizable로 핸들을 추가하고 드래그 시 onResize 콜백 호출.
+const ResizableTitle = (props) => {
+  const { onResize, width, ...restProps } = props;
+  if (!width) return <th {...restProps} />;
+  return (
+    <Resizable
+      width={width}
+      height={0}
+      onResize={onResize}
+      draggableOpts={{ enableUserSelectHack: false }}
+    >
+      <th {...restProps} />
+    </Resizable>
+  );
+};
 
 // Select 옵션 상수
 const PROJECT_TYPES        = ['PMC', 'ISP', 'BPR', '컨설팅', '감리', '구축', '기타'];
@@ -145,6 +164,23 @@ export default function ProjectDetail() {
   const [wbsItems, setWbsItems] = useState([]);
   const [members, setMembers] = useState([]);
   const [wbsDetailItem, setWbsDetailItem] = useState(null);
+  const [wbsFiles, setWbsFiles] = useState({}); // { [wbs_id]: [files] }
+  const [colWidths, setColWidths] = useState({
+    wbs_number: 100,
+    level: 80,
+    title: 200,
+    assignee_name: 100,
+    status: 150,
+    plan_start_date: 110,
+    plan_end_date: 110,
+    dday: 80,
+    plan_progress: 130,
+    actual_progress: 130,
+    deliverable: 200,
+  });
+  const handleResize = (key) => (e, { size }) => {
+    setColWidths(prev => ({ ...prev, [key]: size.width }));
+  };
   const [files, setFiles] = useState([]);
   const [comments, setComments] = useState([]);
   const [commentInput, setCommentInput] = useState('');
@@ -168,9 +204,42 @@ export default function ProjectDetail() {
   const fetchProject  = () => api.get(`/projects/${id}`)
     .then((r) => setProject(r.data))
     .catch(() => message.error('프로젝트 정보를 불러오지 못했어요'));
-  const fetchWbs      = () => api.get(`/projects/${id}/wbs`).then((r) => setWbsItems(r.data)).catch(() => setWbsItems([]));
+
+  // WBS 전체 로드 후 각 WBS의 산출물 파일 일괄 병렬 조회
+  const fetchWbsFiles = async (items) => {
+    if (!items || items.length === 0) { setWbsFiles({}); return; }
+    const pairs = await Promise.all(
+      items.map(w =>
+        api.get(`/wbs/${w.id}/files`)
+          .then(r => [w.id, r.data || []])
+          .catch(() => [w.id, []])
+      )
+    );
+    setWbsFiles(Object.fromEntries(pairs));
+  };
+  const fetchWbs = () => api.get(`/projects/${id}/wbs`)
+    .then((r) => {
+      const items = r.data || [];
+      setWbsItems(items);
+      fetchWbsFiles(items);
+    })
+    .catch(() => { setWbsItems([]); setWbsFiles({}); });
   const fetchFiles    = () => api.get(`/projects/${id}/files`).then((r) => setFiles(r.data)).catch(() => setFiles([]));
   const fetchComments = () => api.get(`/projects/${id}/comments`).then((r) => setComments(r.data)).catch(() => setComments([]));
+
+  // WBS 산출물 파일 다운로드 (blob → createObjectURL)
+  const downloadWbsFile = async (f) => {
+    try {
+      const res = await api.get(`/wbs/files/${f.id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = f.filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error('다운로드 실패');
+    }
+  };
 
   useEffect(() => {
     fetchProject();
@@ -334,10 +403,10 @@ export default function ProjectDetail() {
     return { text: `D+${-diff}`, color: 'red' };
   };
 
-  const wbsColumns = [
-    { title: 'WBS 번호', dataIndex: 'wbs_number', key: 'wbs_number', width: 100 },
+  const wbsColumnsBase = [
+    { title: 'WBS 번호', dataIndex: 'wbs_number', key: 'wbs_number' },
     {
-      title: '레벨', dataIndex: 'level', key: 'level', width: 80,
+      title: '레벨', dataIndex: 'level', key: 'level',
       render: (level) => <Tag color={levelColors[level]}>{level}Lv</Tag>,
     },
     {
@@ -357,18 +426,18 @@ export default function ProjectDetail() {
         </span>
       ),
     },
-    { title: '담당자', dataIndex: 'assignee_name', key: 'assignee_name', width: 100 },
+    { title: '담당자', dataIndex: 'assignee_name', key: 'assignee_name' },
     {
-      title: '상태', key: 'status', width: 150,
+      title: '상태', key: 'status',
       render: (_, record) => {
         const ds = getDisplayStatus(record);
         return <Tag color={ds.color}>{ds.text}</Tag>;
       },
     },
-    { title: '계획 시작일', dataIndex: 'plan_start_date', key: 'plan_start_date', width: 110 },
-    { title: '계획 완료일', dataIndex: 'plan_end_date', key: 'plan_end_date', width: 110 },
+    { title: '계획 시작일', dataIndex: 'plan_start_date', key: 'plan_start_date' },
+    { title: '계획 완료일', dataIndex: 'plan_end_date', key: 'plan_end_date' },
     {
-      title: 'D-day', key: 'dday', width: 80,
+      title: 'D-day', key: 'dday',
       render: (_, record) => {
         const d = dDayLabel(record.plan_end_date);
         if (d === '-') return <Text type="secondary">-</Text>;
@@ -376,18 +445,92 @@ export default function ProjectDetail() {
       },
     },
     {
-      title: '계획진척률', key: 'plan_progress', width: 130,
+      title: '계획진척률', key: 'plan_progress',
       render: (_, record) => {
         const pct = Math.round(calcPlanProgress(record) * 100);
         return <Progress percent={pct} size="small" />;
       },
     },
     {
-      title: '실적진척률', dataIndex: 'actual_progress', key: 'actual_progress', width: 130,
+      title: '실적진척률', dataIndex: 'actual_progress', key: 'actual_progress',
       render: (val) => <Progress percent={Math.round((val || 0) * 100)} size="small" status={(val || 0) >= 1 ? 'success' : 'active'} />,
     },
-    { title: '산출물', dataIndex: 'deliverable', key: 'deliverable' },
+    {
+      title: '산출물', key: 'deliverable',
+      render: (_, record) => {
+        const files = wbsFiles[record.id] || [];
+        if (files.length === 0) return <Text type="secondary">-</Text>;
+
+        // 파일 1개: 클릭 즉시 다운로드
+        if (files.length === 1) {
+          const only = files[0];
+          return (
+            <span
+              onClick={(e) => { e.stopPropagation(); downloadWbsFile(only); }}
+              style={{ cursor: 'pointer', color: '#1677ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: '100%' }}
+              title={only.filename}
+            >
+              📎 {only.filename}
+            </span>
+          );
+        }
+
+        // 파일 2개 이상: Popover 내 List에서 개별 다운로드
+        const popoverContent = (
+          <List
+            size="small"
+            style={{ minWidth: 260, maxWidth: 360 }}
+            dataSource={files}
+            renderItem={(f) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="dl" type="link" size="small" icon={<DownloadOutlined />}
+                    onClick={(e) => { e.stopPropagation(); downloadWbsFile(f); }}
+                  >다운로드</Button>,
+                ]}
+              >
+                <span
+                  style={{ cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}
+                  title={f.filename}
+                  onClick={(e) => { e.stopPropagation(); downloadWbsFile(f); }}
+                >
+                  📎 {f.filename}
+                </span>
+              </List.Item>
+            )}
+          />
+        );
+        const first = files[0];
+        return (
+          <Popover
+            content={popoverContent}
+            title={`산출물 ${files.length}개`}
+            trigger="click"
+            placement="bottomLeft"
+          >
+            <span
+              onClick={(e) => e.stopPropagation()}
+              style={{ cursor: 'pointer', color: '#1677ff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: '100%' }}
+              title={first.filename}
+            >
+              📎 {first.filename} +{files.length - 1}개
+            </span>
+          </Popover>
+        );
+      },
+    },
   ];
+
+  // 각 컬럼에 현재 colWidths 기반 width + onHeaderCell(리사이즈 핸들러) 주입
+  const wbsColumns = wbsColumnsBase.map((col) => ({
+    ...col,
+    width: colWidths[col.key],
+    onHeaderCell: (column) => ({
+      width: column.width,
+      onResize: handleResize(col.key),
+    }),
+  }));
 
   if (!project) return <p>로딩 중...</p>;
 
@@ -1236,7 +1379,15 @@ export default function ProjectDetail() {
         </Row>
         <Card>
           <Title level={5} style={{ marginBottom: 16 }}>WBS 현황</Title>
-          <Table dataSource={wbsItems} columns={wbsColumns} rowKey="id" scroll={{ x: 1400 }} size="small" pagination={false} />
+          <Table
+            dataSource={wbsItems}
+            columns={wbsColumns}
+            rowKey="id"
+            scroll={{ x: 'max-content' }}
+            size="small"
+            pagination={false}
+            components={{ header: { cell: ResizableTitle } }}
+          />
         </Card>
       </>
     );
