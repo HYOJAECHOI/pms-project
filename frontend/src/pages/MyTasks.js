@@ -15,6 +15,15 @@ const { Title, Text } = Typography;
 const statusColors = { '대기': 'default', '진행중': 'blue', '완료': 'green' };
 const levelColors = { 1: 'purple', 2: 'blue', 3: 'cyan', 4: 'green' };
 
+// WBSAssignee에 내가 포함돼 있으면 내 업무로 간주. 배열이 비어있으면 legacy assignee_id로 판정.
+const isMineWbs = (w, userId) => {
+  if (!userId) return false;
+  if (Array.isArray(w.assignees) && w.assignees.length > 0) {
+    return w.assignees.some(a => a.user_id === userId);
+  }
+  return w.assignee_id === userId;
+};
+
 export default function MyTasks({ user }) {
   const [allWbs, setAllWbs] = useState([]);
   const [projects, setProjects] = useState([]);  // 종료 제외된 활성 프로젝트만
@@ -62,7 +71,7 @@ export default function MyTasks({ user }) {
       .then(results => {
         if (cancelled || !results) return;
         const all = results.flat();
-        const mine = all.filter(w => w.assignee_id === user?.id);
+        const mine = all.filter(w => isMineWbs(w, user?.id));
         setAllWbs(mine);
       })
       .catch(() => {
@@ -199,7 +208,7 @@ export default function MyTasks({ user }) {
       setAllWbs(prev => {
         const others = prev.filter(w => w.project_id !== wbsDetailTarget.project_id);
         const refreshed = (res.data || [])
-          .filter(w => w.assignee_id === user.id)
+          .filter(w => isMineWbs(w, user.id))
           .map(w => ({ ...w, project_name: wbsDetailProject?.name, project_id: wbsDetailTarget.project_id, project_status: wbsDetailProject?.status }));
         return [...others, ...refreshed];
       });
