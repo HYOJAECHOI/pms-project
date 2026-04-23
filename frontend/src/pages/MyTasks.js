@@ -3,6 +3,7 @@ import {
   Typography, Card, Tag, Progress, Row, Col, Empty, message, Button,
   Space, Collapse, Checkbox, Input,
 } from 'antd';
+import { PlusOutlined, CheckCircleOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import WBSDetailModal from '../components/WBSDetailModal';
@@ -19,7 +20,10 @@ const isMineWbs = (w, userId) => {
   return w.assignee_id === userId;
 };
 
-const todayISO = () => new Date().toISOString().split('T')[0];
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
 
 // D-N 태그: D-0 빨강 / D-1~3 주황 / D-4~7 노랑 / D+ 진한빨강
@@ -48,9 +52,13 @@ export default function MyTasks({ user }) {
   const [memoText, setMemoText] = useState('');
   const [hoveredId, setHoveredId] = useState(null);       // 전체 카드 hover (prefix 키 사용)
 
+  const [workPlans, setWorkPlans] = useState([]);          // 오늘의 계획 목록
+  const [addingPlan, setAddingPlan] = useState(null);      // 계획 추가 중인 wbs_id (로딩 상태)
+
   const instructionRef = useRef(null);
   const todayRef = useRef(null);
   const projectRef = useRef(null);
+  const planRef = useRef(null);
   const navigate = useNavigate();
 
   // ===== getDisplayStatus (기존 로직 유지) =====
@@ -114,11 +122,20 @@ export default function MyTasks({ user }) {
     }
   };
 
+  const fetchWorkPlans = async () => {
+    try {
+      const res = await api.get('/work-plans', { params: { date: todayISO() } });
+      setWorkPlans(res.data || []);
+    } catch {
+      setWorkPlans([]);
+    }
+  };
+
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
     setLoading(true);
-    Promise.all([refreshMyWbs(), refreshMyInstructions()])
+    Promise.all([refreshMyWbs(), refreshMyInstructions(), fetchWorkPlans()])
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -244,6 +261,66 @@ export default function MyTasks({ user }) {
     }
   };
 
+  // ===== work_plans 핸들러 =====
+  const handleAddPlan = async (w) => {
+    if (workPlans.some(p => p.wbs_id === w.id)) {
+      message.info('이미 오늘 계획에 있어요');
+      return;
+    }
+    setAddingPlan(w.id);
+    try {
+      await api.post('/work-plans', null, {
+        params: { wbs_id: w.id, plan_date: todayISO() },
+      });
+      message.success('오늘의 계획에 추가됐어요');
+      await fetchWorkPlans();
+    } catch {
+      message.error('계획 추가 실패');
+    } finally {
+      setAddingPlan(null);
+    }
+  };
+
+  const handlePlanDone = async (plan) => {
+    // '완료' ↔ '완료취소' 토글: done이면 planned로 되돌림
+    const next = plan.status === 'done' ? 'planned' : 'done';
+    try {
+      await api.put(`/work-plans/${plan.id}`, null, { params: { status: next } });
+      await fetchWorkPlans();
+    } catch {
+      message.error('상태 변경 실패');
+    }
+  };
+
+  const handlePlanSkip = async (plan) => {
+    // '건너뛰기' ↔ '건너뛰기취소' 토글
+    const next = plan.status === 'skipped' ? 'planned' : 'skipped';
+    try {
+      await api.put(`/work-plans/${plan.id}`, null, { params: { status: next } });
+      await fetchWorkPlans();
+    } catch {
+      message.error('상태 변경 실패');
+    }
+  };
+
+  const handlePlanMemo = async (plan, memo) => {
+    try {
+      await api.put(`/work-plans/${plan.id}`, null, { params: { memo } });
+      await fetchWorkPlans();
+    } catch {
+      message.error('메모 저장 실패');
+    }
+  };
+
+  const handleRemovePlan = async (plan) => {
+    try {
+      await api.delete(`/work-plans/${plan.id}`);
+      await fetchWorkPlans();
+    } catch {
+      message.error('제거 실패');
+    }
+  };
+
   const wbsDetailProject = useMemo(
     () => projects.find(p => p.id === wbsDetailTarget?.project_id) || null,
     [projects, wbsDetailTarget]
@@ -252,6 +329,7 @@ export default function MyTasks({ user }) {
   const onModalUpdate = async () => {
     await refreshMyWbs();
     await refreshMyInstructions();
+    await fetchWorkPlans();
   };
 
   // ===== 렌더 =====
@@ -272,6 +350,7 @@ export default function MyTasks({ user }) {
     const dday = dDayInfo(w.plan_end_date);
     const isChecked = !!checkedItems[w.id];
     const hoverKey = `todo-${w.id}`;
+    const isPlanned = workPlans.some(p => p.wbs_id === w.id);
     const stop = (e) => e.stopPropagation();
 
     return (
@@ -297,6 +376,17 @@ export default function MyTasks({ user }) {
             </Tag>
           )}
           <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
+          <span onClick={stop}>
+            <Button
+              size="small"
+              type={isPlanned ? 'primary' : 'default'}
+              icon={<PlusOutlined />}
+              loading={addingPlan === w.id}
+              onClick={(e) => { e.stopPropagation(); handleAddPlan(w); }}
+            >
+              {isPlanned ? '계획됨' : '오늘 계획'}
+            </Button>
+          </span>
         </div>
         {memoOpen === w.id && (
           <div
@@ -324,6 +414,7 @@ export default function MyTasks({ user }) {
   const summaryCards = [
     { key: 'today', title: '🔴 오늘 마감', value: todayDueCount, color: '#ff4d4f', targetRef: todayRef },
     { key: 'week',  title: '🟡 이번 주 마감', value: weekDueCount, color: '#fa8c16', targetRef: todayRef },
+    { key: 'plan',  title: '📋 오늘의 계획', value: workPlans.length, color: '#13c2c2', targetRef: planRef },
     { key: 'ins',   title: '📬 새 지시사항', value: activeInstructions.length, color: '#1677ff', targetRef: instructionRef },
     { key: 'delay', title: '⚠️ 지연 중', value: delayedCount, color: '#a8071a', targetRef: todayRef },
   ];
@@ -335,7 +426,7 @@ export default function MyTasks({ user }) {
       {/* 1. 요약 카드 */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
         {summaryCards.map(c => (
-          <Col span={6} key={c.key}>
+          <Col flex="1 1 0" key={c.key} style={{ minWidth: 0 }}>
             <Card hoverable style={summaryCardStyle} onClick={() => scrollToRef(c.targetRef)}>
               <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{c.title}</div>
               <div style={{ fontSize: 28, fontWeight: 600, color: c.color }}>{c.value}</div>
@@ -343,6 +434,86 @@ export default function MyTasks({ user }) {
           </Col>
         ))}
       </Row>
+
+      {/* 1.5 오늘의 계획 */}
+      <div ref={planRef}>
+        <Card title={<span>📋 오늘의 계획 ({workPlans.length}건)</span>} style={{ marginBottom: 16 }}>
+          {workPlans.length === 0 ? (
+            <Text type="secondary">오늘의 할일에서 작업을 선택해주세요</Text>
+          ) : (
+            workPlans.map(plan => (
+              <Card
+                size="small"
+                key={plan.id}
+                style={{
+                  marginBottom: 8,
+                  backgroundColor:
+                    plan.status === 'done' ? '#f6ffed' :
+                    plan.status === 'skipped' ? '#f5f5f5' : '#fff',
+                  border: plan.status === 'done' ? '1px solid #b7eb8f' :
+                          plan.status === 'skipped' ? '1px solid #d9d9d9' :
+                          '1px solid #d9d9d9',
+                }}
+              >
+                <Row align="middle" justify="space-between" gutter={8}>
+                  <Col flex="auto" style={{ minWidth: 0 }}>
+                    <Space>
+                      {plan.status === 'done' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
+                      {plan.status === 'skipped' && <MinusCircleOutlined style={{ color: '#bbb' }} />}
+                      <Text
+                        strong
+                        ellipsis
+                        delete={plan.status === 'skipped'}
+                        style={{
+                          maxWidth: 200,
+                          color: plan.status === 'done' ? '#52c41a'
+                            : plan.status === 'skipped' ? '#bbb' : undefined,
+                        }}
+                      >
+                        {plan.wbs_title}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{plan.project_name}</Text>
+                    </Space>
+                  </Col>
+                  <Col>
+                    <Space>
+                      {plan.status === 'planned' && (
+                        <>
+                          <Button size="small" type="primary" onClick={() => handlePlanDone(plan)}>완료</Button>
+                          <Button size="small" onClick={() => handlePlanSkip(plan)}>건너뛰기</Button>
+                        </>
+                      )}
+                      {plan.status === 'done' && (
+                        <Button size="small" onClick={() => handlePlanDone(plan)}>완료취소</Button>
+                      )}
+                      {plan.status === 'skipped' && (
+                        <Button size="small" onClick={() => handlePlanSkip(plan)}>건너뛰기취소</Button>
+                      )}
+                      <Button size="small" danger onClick={() => handleRemovePlan(plan)}>제거</Button>
+                    </Space>
+                  </Col>
+                </Row>
+                <Row style={{ marginTop: 8 }}>
+                  <Col flex="auto">
+                    <Input.TextArea
+                      placeholder="메모 남기기 (선택)"
+                      size="small"
+                      autoSize
+                      defaultValue={plan.memo || ''}
+                      onBlur={(e) => {
+                        if (e.target.value !== (plan.memo || '')) {
+                          handlePlanMemo(plan, e.target.value);
+                        }
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Col>
+                </Row>
+              </Card>
+            ))
+          )}
+        </Card>
+      </div>
 
       {/* 2. 새 지시사항 */}
       <div ref={instructionRef}>

@@ -24,7 +24,8 @@
       "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/GanttChart.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('GanttChart OK'\\)\")",
       "Bash(node -e \"require\\('@babel/parser'\\).parse\\(require\\('fs'\\).readFileSync\\('src/pages/ProjectDetail.js','utf8'\\), {sourceType:'module', plugins:['jsx']}\\); console.log\\('ProjectDetail OK'\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/alembic.exe revision *)",
-      "Bash(npm list *)"
+      "Bash(npm list *)",
+      "Bash(node *)"
     ]
   }
 }
