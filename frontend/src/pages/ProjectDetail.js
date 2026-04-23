@@ -16,6 +16,7 @@ import {
   STAGE_COLOR, DEFAULT_STAGE, WON_STAGES, LOST_STAGES,
   STAGE_GROUPS, stageGroupKey, STAGE_PREV_MAP,
 } from '../constants/stages';
+import WBSDetailModal from '../components/WBSDetailModal';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -143,6 +144,7 @@ export default function ProjectDetail() {
   const [project, setProject] = useState(null);
   const [wbsItems, setWbsItems] = useState([]);
   const [members, setMembers] = useState([]);
+  const [wbsDetailItem, setWbsDetailItem] = useState(null);
   const [files, setFiles] = useState([]);
   const [comments, setComments] = useState([]);
   const [commentInput, setCommentInput] = useState('');
@@ -276,22 +278,47 @@ export default function ProjectDetail() {
   };
 
   // 화면 전용 상태 라벨/색상 (GanttChart의 getDisplayStatus와 동일 규칙)
+  // 계획(plan)과 실제(actual) 두 축으로 판정.
   const getDisplayStatus = (item) => {
     const wbsStatusColor = { '대기': 'default', '진행중': 'blue', '완료': 'green' };
-    const { status, plan_end_date: planEnd, actual_end_date: actualEnd } = item || {};
+    const {
+      status,
+      plan_start_date: planStart,
+      plan_end_date: planEnd,
+      actual_start_date: actualStart,
+      actual_end_date: actualEnd,
+    } = item || {};
     const today = dayjs().format('YYYY-MM-DD');
     const days = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
-    if (status === '대기') return { text: '대기', color: wbsStatusColor['대기'], delayed: false };
-    if (status === '진행중') {
-      if (!actualEnd && planEnd && today > planEnd) return { text: `진행중 (${days(today, planEnd)}일 지연)`, color: 'red', delayed: true };
-      if (actualEnd && planEnd && actualEnd > planEnd) return { text: `진행중 (${days(actualEnd, planEnd)}일 초과)`, color: 'red', delayed: true };
-      return { text: '진행중', color: wbsStatusColor['진행중'], delayed: false };
+
+    // actual_end_date가 존재하고 오늘 이전이면 DB status 무관하게 완료 계열로 표시
+    if (actualEnd && actualEnd <= today) {
+      if (planEnd && actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: 'orange', delayed: false };
+      if (planEnd && actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: 'green', delayed: false };
+      if (planEnd && actualEnd === planEnd) return { text: '완료 (정시)', color: 'green', delayed: false };
+      return { text: '완료', color: wbsStatusColor['완료'], delayed: false };
     }
+
     if (status === '완료') {
       if (!actualEnd || !planEnd) return { text: '완료', color: wbsStatusColor['완료'], delayed: false };
-      if (actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: 'green', delayed: false };
       if (actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: 'orange', delayed: false };
+      if (actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: 'green', delayed: false };
       return { text: '완료 (정시)', color: 'green', delayed: false };
+    }
+    if (status === '진행중') {
+      if (actualEnd && planEnd && actualEnd > planEnd) {
+        return { text: `진행중 (${days(actualEnd, planEnd)}일 초과)`, color: 'red', delayed: true };
+      }
+      if (!actualEnd && planEnd && planEnd < today) {
+        return { text: `진행중 (${days(today, planEnd)}일 지연)`, color: 'red', delayed: true };
+      }
+      if (!actualStart && planStart && planStart < today) {
+        return { text: '진행중 (시작 지연)', color: 'orange', delayed: true };
+      }
+      return { text: '진행중', color: wbsStatusColor['진행중'], delayed: false };
+    }
+    if (status === '대기') {
+      return { text: '대기', color: wbsStatusColor['대기'], delayed: false };
     }
     return { text: status || '-', color: wbsStatusColor[status] || 'default', delayed: false };
   };
@@ -316,7 +343,16 @@ export default function ProjectDetail() {
     {
       title: '작업명', dataIndex: 'title', key: 'title',
       render: (text, record) => (
-        <span style={{ paddingLeft: (record.level - 1) * 20, fontWeight: record.level === 1 ? 'bold' : 'normal' }}>
+        <span
+          onClick={() => setWbsDetailItem(record)}
+          style={{
+            paddingLeft: (record.level - 1) * 20,
+            fontWeight: record.level === 1 ? 'bold' : 'normal',
+            color: '#1677ff',
+            cursor: 'pointer',
+          }}
+          title="클릭: 상세 모달"
+        >
           {text}
         </span>
       ),
@@ -1319,6 +1355,16 @@ export default function ProjectDetail() {
         userId={viewingUserId}
         onClose={() => setViewingUserId(null)}
         currentUserRole={me?.role}
+      />
+
+      <WBSDetailModal
+        visible={!!wbsDetailItem}
+        wbsItem={wbsDetailItem}
+        project={project}
+        currentUser={me}
+        members={members}
+        onClose={() => setWbsDetailItem(null)}
+        onUpdate={() => { fetchWbs(); fetchProject(); }}
       />
 
       <Modal

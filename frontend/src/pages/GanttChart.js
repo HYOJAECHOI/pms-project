@@ -6,6 +6,7 @@ import { saveAs } from 'file-saver';
 import api from '../api/axios';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
+import WBSDetailModal from '../components/WBSDetailModal';
 
 const { Content } = Layout;
 const { Title } = Typography;
@@ -76,8 +77,8 @@ export default function GanttChart() {
     const fd = new FormData();
     fd.append('file', file);
     try {
+      // uploaded_by는 백엔드가 토큰에서 추출하므로 클라이언트에서 보내지 않음
       await api.post(`/wbs/${wbsId}/files`, fd, {
-        params: { uploaded_by: currentUserId },
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       await loadWbsFiles(wbsId);
@@ -209,6 +210,25 @@ export default function GanttChart() {
   const scrollRef = useRef(null);
   const headerRef = useRef(null);
   const [editForm] = Form.useForm();
+  const [wbsDetailItem, setWbsDetailItem] = useState(null);
+  const titleClickTimerRef = useRef(null);
+  const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } })();
+
+  // 제목 셀: 단일클릭(300ms) → 상세 모달, 더블클릭 → 인라인 편집
+  const handleTitleClick = (item) => {
+    if (titleClickTimerRef.current) clearTimeout(titleClickTimerRef.current);
+    titleClickTimerRef.current = setTimeout(() => {
+      setWbsDetailItem(item);
+      titleClickTimerRef.current = null;
+    }, 300);
+  };
+  const handleTitleDoubleClick = (item) => {
+    if (titleClickTimerRef.current) {
+      clearTimeout(titleClickTimerRef.current);
+      titleClickTimerRef.current = null;
+    }
+    setEditingCell({ id: item.id, field: 'title' });
+  };
 
   useEffect(() => { fetchAll(); }, [id]);
 
@@ -307,43 +327,68 @@ export default function GanttChart() {
     return Math.max(0, Math.min(p, 1));
   };
 
-  // DB 저장용 상태는 대기/진행중/완료 3가지만. 지연 여부는 getDisplayStatus에서만 계산.
-  const calcActualStatus = (actualEnd /* , planEnd */) => {
-    if (!actualEnd) return '진행중';
+  // DB 저장용 상태는 대기/진행중/완료 3가지만. 지연/초과는 getDisplayStatus에서만 계산.
+  // actual_end_date가 오늘 이전이면 무조건 완료.
+  // eslint-disable-next-line no-unused-vars
+  const calcActualStatus = (actualStart, actualEnd, actualProgress, planStart, planEnd) => {
     const today = dayjs().format('YYYY-MM-DD');
-    if (today < actualEnd) return '진행중';
-    return '완료';
+
+    // 실적 종료일이 오늘 이전 → 완료
+    if (actualEnd && actualEnd <= today) return '완료';
+
+    // 실적 시작했으면 → 진행중
+    if (actualStart && actualStart <= today) return '진행중';
+
+    // 실적 없으면 계획 기준
+    if (!actualStart || !actualProgress || Number(actualProgress) === 0) {
+      if (planStart && planStart > today) return '대기';
+      return '진행중';
+    }
+
+    return '진행중';
   };
 
   // 화면 표시용 상태 라벨·색상 계산 (DB 저장값은 건드리지 않음)
+  // 계획/실제 두 축을 모두 참조해 대기/진행중/완료와 부가 라벨 결정.
   const getDisplayStatus = (item) => {
-    const { status, plan_end_date: planEnd, actual_end_date: actualEnd } = item || {};
+    const {
+      status,
+      plan_start_date: planStart,
+      plan_end_date: planEnd,
+      actual_start_date: actualStart,
+      actual_end_date: actualEnd,
+    } = item || {};
     const today = dayjs().format('YYYY-MM-DD');
-    const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
+    const days = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
 
-    if (status === '대기') {
-      return { text: '대기', color: statusColors['대기'] };
+    // actual_end_date가 존재하고 오늘 이전이면 DB status 무관하게 완료 계열로 표시
+    if (actualEnd && actualEnd <= today) {
+      if (planEnd && actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: '#fa8c16' };
+      if (planEnd && actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: '#52c41a' };
+      if (planEnd && actualEnd === planEnd) return { text: '완료 (정시)', color: '#52c41a' };
+      return { text: '완료', color: statusColors['완료'] };
+    }
+
+    if (status === '완료') {
+      if (!actualEnd || !planEnd) return { text: '완료', color: statusColors['완료'] };
+      if (actualEnd > planEnd) return { text: `완료 (${days(actualEnd, planEnd)}일 초과)`, color: '#fa8c16' };
+      if (actualEnd < planEnd) return { text: `완료 (${days(planEnd, actualEnd)}일 조기)`, color: '#52c41a' };
+      return { text: '완료 (정시)', color: '#52c41a' };
     }
     if (status === '진행중') {
-      if (!actualEnd && planEnd && today > planEnd) {
-        return { text: `진행중 (${daysBetween(today, planEnd)}일 지연)`, color: '#ff4d4f' };
-      }
       if (actualEnd && planEnd && actualEnd > planEnd) {
-        return { text: `진행중 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: '#ff4d4f' };
+        return { text: `진행중 (${days(actualEnd, planEnd)}일 초과)`, color: '#ff4d4f' };
+      }
+      if (!actualEnd && planEnd && planEnd < today) {
+        return { text: `진행중 (${days(today, planEnd)}일 지연)`, color: '#ff4d4f' };
+      }
+      if (!actualStart && planStart && planStart < today) {
+        return { text: '진행중 (시작 지연)', color: '#fa8c16' };
       }
       return { text: '진행중', color: statusColors['진행중'] };
     }
-    if (status === '완료') {
-      if (!actualEnd || !planEnd) {
-        return { text: '완료', color: statusColors['완료'] };
-      }
-      if (actualEnd < planEnd) {
-        return { text: `완료 (${daysBetween(planEnd, actualEnd)}일 조기)`, color: '#52c41a' };
-      }
-      if (actualEnd > planEnd) {
-        return { text: `완료 (${daysBetween(actualEnd, planEnd)}일 초과)`, color: '#fa8c16' };
-      }
-      return { text: '완료 (정시)', color: '#52c41a' };
+    if (status === '대기') {
+      return { text: '대기', color: statusColors['대기'] };
     }
     return { text: status || '-', color: statusColors[status] || '#d9d9d9' };
   };
@@ -447,7 +492,7 @@ const recomputeParentActualRange = async (childItem, latestItems) => {
   const progs = siblings.map(s => Number(s.actual_progress) || 0);
   const avgProg = progs.length ? progs.reduce((a, b) => a + b, 0) / progs.length : 0;
   const newProg = parseFloat(avgProg.toFixed(2));
-  const newStatus = calcActualStatus(newEnd, parent.plan_end_date);
+  const newStatus = calcActualStatus(newStart, newEnd, newProg, parent.plan_start_date, parent.plan_end_date);
 
   // 변경 사항 없으면 skip
   if (parent.actual_start_date === newStart
@@ -764,7 +809,7 @@ if (field === 'wbs_number') {
       const actualEnd   = field === 'actual_end_date'   ? value : item.actual_end_date;
       if (actualStart && actualEnd) {
         const progress = calcActualProgress(actualStart, actualEnd);
-        const status = calcActualStatus(actualEnd, item.plan_end_date);
+        const status = calcActualStatus(actualStart, actualEnd, progress, item.plan_start_date, item.plan_end_date);
         updated = { ...updated, actual_progress: parseFloat(progress.toFixed(2)), status };
       }
     }
@@ -772,6 +817,15 @@ if (field === 'wbs_number') {
     if (field === 'plan_start_date' || field === 'plan_end_date') {
       const planStart = field === 'plan_start_date' ? value : item.plan_start_date;
       const planEnd = field === 'plan_end_date' ? value : item.plan_end_date;
+      // plan 변경 시에도 status 재계산 (예: plan_start를 미래로 옮기면 '대기'로 전환)
+      const newStatus = calcActualStatus(
+        item.actual_start_date,
+        item.actual_end_date,
+        item.actual_progress,
+        planStart,
+        planEnd,
+      );
+      updated = { ...updated, status: newStatus };
       await checkAndExpandParent(item, planStart, planEnd);
       await checkProjectRangeOverflow({ planStart, planEnd });
       const latestItems = await fetchAll();
@@ -815,9 +869,18 @@ if (field === 'wbs_number') {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       if (!currentItem.plan_start_date || !currentItem.plan_end_date) return;
+      // plan 변경 시 status 재계산 (plan_start 미래면 '대기'로 전환)
+      const newStatus = calcActualStatus(
+        currentItem.actual_start_date,
+        currentItem.actual_end_date,
+        currentItem.actual_progress,
+        currentItem.plan_start_date,
+        currentItem.plan_end_date,
+      );
       const params = new URLSearchParams();
       params.append('plan_start_date', currentItem.plan_start_date);
       params.append('plan_end_date',   currentItem.plan_end_date);
+      params.append('status', newStatus);
       await api.put(`/wbs/${item.id}?${params.toString()}`);
       await checkAndExpandParent(currentItem, currentItem.plan_start_date, currentItem.plan_end_date);
       await checkProjectRangeOverflow({
@@ -852,7 +915,7 @@ if (field === 'wbs_number') {
     window.removeEventListener('mousemove', onMove);
     window.removeEventListener('mouseup', onUp);
     const progress = calcActualProgress(currentItem.actual_start_date, currentItem.actual_end_date);
-    const status = calcActualStatus(currentItem.actual_end_date, currentItem.plan_end_date);
+    const status = calcActualStatus(currentItem.actual_start_date, currentItem.actual_end_date, progress, currentItem.plan_start_date, currentItem.plan_end_date);
     const params = new URLSearchParams();
     if (currentItem.actual_start_date) params.append('actual_start_date', currentItem.actual_start_date);
     if (currentItem.actual_end_date)   params.append('actual_end_date',   currentItem.actual_end_date);
@@ -976,6 +1039,12 @@ if (field === 'wbs_number') {
       if (addedIds.length > 0 || removedIds.length > 0) {
         await propagateAssigneesUp(updated, addedIds, removedIds);
       }
+      await checkProjectRangeOverflow({
+        planStart: updated.plan_start_date,
+        planEnd: updated.plan_end_date,
+        actualStart: updated.actual_start_date,
+        actualEnd: updated.actual_end_date,
+      });
       message.success('수정됐어요!'); fetchAll(); setEditModalOpen(false);
     });
   };
@@ -1022,11 +1091,14 @@ const handleAdd = async (values) => {
   params.set('level', level);
   const planStart = values.plan_start_date ? values.plan_start_date.format('YYYY-MM-DD') : null;
   const planEnd = values.plan_end_date ? values.plan_end_date.format('YYYY-MM-DD') : null;
+  const actualStart = values.actual_start_date ? values.actual_start_date.format('YYYY-MM-DD') : null;
+  const actualEnd = values.actual_end_date ? values.actual_end_date.format('YYYY-MM-DD') : null;
   await api.post(`/projects/${id}/wbs?${params.toString()}`);
   if (parent && (planStart || planEnd)) await checkAndExpandParent({ parent_id: parent.id }, planStart, planEnd);
   if (parent && mergedAssigneeIds.length > 0) {
     await propagateAssigneesUp({ parent_id: parent.id }, mergedAssigneeIds);
   }
+  await checkProjectRangeOverflow({ planStart, planEnd, actualStart, actualEnd });
   if (parent) {
     const latestItems = await fetchAll();
     await recomputeParentPlanRange({ parent_id: parent.id }, latestItems);
@@ -1055,10 +1127,23 @@ const handleSetGanttDate = async (item, dateType, dateStr) => {
     const actualEnd   = dateType === 'actual_end_date'   ? dateStr : item.actual_end_date;
     if (actualStart && actualEnd) {
       const progress = calcActualProgress(actualStart, actualEnd);
-      const status = calcActualStatus(actualEnd, item.plan_end_date);
+      const status = calcActualStatus(actualStart, actualEnd, progress, item.plan_start_date, item.plan_end_date);
       params.append('actual_progress', parseFloat(progress.toFixed(2)));
       params.append('status', status);
     }
+  }
+  if (dateType === 'plan_start_date' || dateType === 'plan_end_date') {
+    // plan 변경 시에도 status 재계산 (plan_start 미래면 '대기'로 전환)
+    const newPlanStart = dateType === 'plan_start_date' ? dateStr : item.plan_start_date;
+    const newPlanEnd   = dateType === 'plan_end_date'   ? dateStr : item.plan_end_date;
+    const newStatus = calcActualStatus(
+      item.actual_start_date,
+      item.actual_end_date,
+      item.actual_progress,
+      newPlanStart,
+      newPlanEnd,
+    );
+    params.append('status', newStatus);
   }
   await api.put(`/wbs/${item.id}?${params.toString()}`);
   if (dateType === 'plan_start_date' || dateType === 'plan_end_date') {
@@ -1152,7 +1237,12 @@ if (col.key === 'wbs_number') return isEditing ? (
         <span style={{ paddingLeft: (item.level - 1) * 12, fontWeight: item.level === 1 ? 'bold' : 'normal', fontSize: 11, width: '100%', display: 'flex', alignItems: 'center', gap: 4 }}>
          
           <Tag color={levelColors[item.level]} style={{ fontSize: 9, padding: '0 3px', flexShrink: 0 }}>{item.level}L</Tag>
-          <span onClick={() => setEditingCell({ id: item.id, field: 'title' })} style={{ cursor: 'text', flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+          <span
+            onClick={() => handleTitleClick(item)}
+            onDoubleClick={() => handleTitleDoubleClick(item)}
+            style={{ cursor: 'pointer', flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+            title="클릭: 상세 · 더블클릭: 편집"
+          >
             {item.wbs_number} {item.title}
           </span>
         </span>
@@ -1650,6 +1740,15 @@ return (
         <Modal title="WBS 항목 수정" open={editModalOpen} onCancel={() => setEditModalOpen(false)} onOk={() => editForm.submit()} width={560}>
           {wbsForm(editForm, handleEditSubmit, false, editingItem ? hasChildren(editingItem) : false)}
         </Modal>
+        <WBSDetailModal
+          visible={!!wbsDetailItem}
+          wbsItem={wbsDetailItem}
+          project={project}
+          currentUser={currentUser}
+          members={members}
+          onClose={() => setWbsDetailItem(null)}
+          onUpdate={() => fetchAll()}
+        />
   </div>
   );
 }

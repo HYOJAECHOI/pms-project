@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from datetime import date, datetime
 import models
+from routers.wbs import _safe_unlink_upload
 
 router = APIRouter()
 
@@ -322,14 +323,54 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
         models.ProjectMember.project_id == project_id
     ).delete(synchronize_session=False)
 
-    # 2) WBS 담당자 → WBS 항목 (WBSAssignee는 wbs_id로 연결되므로 프로젝트의 WBS id 목록을 먼저 수집)
+    # 2) WBS 연관 데이터 (wbs_id 기반). WBS 항목 삭제 전에 모두 정리.
     wbs_ids = [w.id for w in db.query(models.WBSItem.id).filter(
         models.WBSItem.project_id == project_id
     ).all()]
     if wbs_ids:
+        # 2-a) WBS 산출물 파일 (실물 + 레코드)
+        file_rows = db.query(models.WBSFile).filter(
+            models.WBSFile.wbs_id.in_(wbs_ids)
+        ).all()
+        for f in file_rows:
+            _safe_unlink_upload(f.filepath)
+        db.query(models.WBSFile).filter(
+            models.WBSFile.wbs_id.in_(wbs_ids)
+        ).delete(synchronize_session=False)
+
+        # 2-b) WBS 댓글 (자기참조 FK 선해제)
+        db.query(models.WBSComment).filter(
+            models.WBSComment.wbs_id.in_(wbs_ids)
+        ).update({models.WBSComment.parent_comment_id: None}, synchronize_session=False)
+        db.query(models.WBSComment).filter(
+            models.WBSComment.wbs_id.in_(wbs_ids)
+        ).delete(synchronize_session=False)
+
+        # 2-c) 지시 수신 → 지시
+        instruction_ids = [
+            i.id for i in db.query(models.WBSInstruction.id).filter(
+                models.WBSInstruction.wbs_id.in_(wbs_ids)
+            ).all()
+        ]
+        if instruction_ids:
+            db.query(models.WBSInstructionReceipt).filter(
+                models.WBSInstructionReceipt.instruction_id.in_(instruction_ids)
+            ).delete(synchronize_session=False)
+        db.query(models.WBSInstruction).filter(
+            models.WBSInstruction.wbs_id.in_(wbs_ids)
+        ).delete(synchronize_session=False)
+
+        # 2-d) 담당자
         db.query(models.WBSAssignee).filter(
             models.WBSAssignee.wbs_id.in_(wbs_ids)
         ).delete(synchronize_session=False)
+
+    # 2-e) 프로젝트 전체 활동 이력 (wbs_id 나 project_id 기준 모두)
+    db.query(models.ActivityLog).filter(
+        models.ActivityLog.project_id == project_id
+    ).delete(synchronize_session=False)
+
+    # 2-f) WBS 본체
     db.query(models.WBSItem).filter(
         models.WBSItem.project_id == project_id
     ).delete(synchronize_session=False)

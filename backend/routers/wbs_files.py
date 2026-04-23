@@ -1,6 +1,6 @@
 import os
 import shutil
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from database import get_db
@@ -9,6 +9,7 @@ import models
 router = APIRouter()
 
 UPLOAD_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
+UPLOAD_ROOT_ABS = os.path.abspath(UPLOAD_ROOT)
 
 
 def _wbs_dir(wbs_id: int) -> str:
@@ -17,13 +18,34 @@ def _wbs_dir(wbs_id: int) -> str:
     return path
 
 
+def _extract_user_id(request: Request):
+    """JWT payload에서 사용자 id를 추출. sub는 문자열로 저장되므로 int 변환."""
+    payload = getattr(request.state, "user_payload", None) or {}
+    sub = payload.get("user_id") or payload.get("sub")
+    if sub is None:
+        return None
+    try:
+        return int(sub)
+    except (TypeError, ValueError):
+        return None
+
+
+def _assert_path_inside_upload_root(filepath: str):
+    """저장된 filepath가 UPLOAD_ROOT 하위인지 검증 (경로 이탈 방지)."""
+    if not filepath:
+        raise HTTPException(status_code=400, detail="잘못된 파일 경로")
+    abs_path = os.path.abspath(filepath)
+    if not abs_path.startswith(UPLOAD_ROOT_ABS + os.sep) and abs_path != UPLOAD_ROOT_ABS:
+        raise HTTPException(status_code=400, detail="잘못된 파일 경로")
+
+
 def _serialize(f: models.WBSFile, user_map: dict) -> dict:
+    """filepath는 응답에 포함하지 않음 (서버 내부 경로 노출 방지)."""
     return {
         "id": f.id,
         "wbs_id": f.wbs_id,
         "project_id": f.project_id,
         "filename": f.filename,
-        "filepath": f.filepath,
         "filesize": f.filesize,
         "uploaded_by": f.uploaded_by,
         "uploaded_by_name": user_map.get(f.uploaded_by) if user_map else None,
@@ -34,7 +56,7 @@ def _serialize(f: models.WBSFile, user_map: dict) -> dict:
 @router.post("/wbs/{wbs_id}/files")
 def upload_wbs_file(
     wbs_id: int,
-    uploaded_by: int = None,
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -57,13 +79,14 @@ def upload_wbs_file(
         shutil.copyfileobj(file.file, f)
     filesize = os.path.getsize(target_path)
 
+    uploader_id = _extract_user_id(request)
     record = models.WBSFile(
         wbs_id=wbs_id,
         project_id=wbs.project_id,
         filename=os.path.basename(target_path),
         filepath=target_path,
         filesize=filesize,
-        uploaded_by=uploaded_by,
+        uploaded_by=uploader_id,
     )
     db.add(record)
     db.commit()
@@ -92,7 +115,8 @@ def download_wbs_file(file_id: int, db: Session = Depends(get_db)):
     record = db.query(models.WBSFile).filter(models.WBSFile.id == file_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없어요.")
-    if not record.filepath or not os.path.exists(record.filepath):
+    _assert_path_inside_upload_root(record.filepath)
+    if not os.path.exists(record.filepath):
         raise HTTPException(status_code=410, detail="저장된 파일이 사라졌어요.")
     return FileResponse(record.filepath, filename=record.filename)
 
@@ -102,6 +126,7 @@ def delete_wbs_file(file_id: int, db: Session = Depends(get_db)):
     record = db.query(models.WBSFile).filter(models.WBSFile.id == file_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없어요.")
+    _assert_path_inside_upload_root(record.filepath)
     if record.filepath and os.path.exists(record.filepath):
         try:
             os.remove(record.filepath)

@@ -166,3 +166,58 @@ class WorkReport(Base):
     status = Column(String, default="대기")  # 대기/승인/반려
     created_at = Column(DateTime, default=datetime.utcnow)
     pm_comment = Column(String, nullable=True)
+
+
+class WBSComment(Base):
+    __tablename__ = "wbs_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    parent_comment_id = Column(Integer, ForeignKey("wbs_comments.id"), nullable=True)
+    content = Column(Text, nullable=False)
+    comment_type = Column(String, default="memo")  # memo/question/answer/progress_note
+    memo_category = Column(String, nullable=True)  # daily_work/issue/next_action/reference
+    visibility_scope = Column(String, default="all")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WBSInstruction(Base):
+    __tablename__ = "wbs_instructions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=False)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=True)
+    priority = Column(String, default="normal")  # low/normal/high/urgent
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WBSInstructionReceipt(Base):
+    __tablename__ = "wbs_instruction_receipts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    instruction_id = Column(Integer, ForeignKey("wbs_instructions.id", ondelete="CASCADE"), nullable=False)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String, default="open")  # open/acknowledged/in_progress/completed/cancelled
+    acknowledged_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    completion_note = Column(Text, nullable=True)
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    wbs_id = Column(Integer, ForeignKey("wbs_items.id"), nullable=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    action_type = Column(String, nullable=False)
+    before_json = Column(Text, nullable=True)
+    after_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

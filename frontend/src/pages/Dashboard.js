@@ -7,6 +7,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import api from '../api/axios';
+import { ACTIVE_STAGES, DEFAULT_STAGE } from '../constants/stages';
 
 const { Title, Text } = Typography;
 const statusColor = { '제안': 'blue', '수행': 'green', '종료': 'default' };
@@ -67,10 +68,16 @@ export default function Dashboard() {
   const inProgress = projects.filter((p) => p.status === '수행').length;
   const completed  = projects.filter((p) => p.status === '종료').length;
 
-  // 프로젝트별 소속 WBS 중 지연 항목이 1개 이상이면 해당 프로젝트를 지연 프로젝트로 카운트
+  // 프로젝트별 소속 WBS 중 지연 항목이 1개 이상이면 해당 프로젝트를 지연 프로젝트로 카운트.
+  // 단, 완료·이력 단계(수행 중이 아님) 프로젝트는 지연 카운트에서 제외.
   const delayedProjectCount = useMemo(() => (
-    Object.values(wbsStats).filter((s) => s.delayed > 0).length
-  ), [wbsStats]);
+    projects.filter((p) => {
+      const stage = p.pipeline_stage || DEFAULT_STAGE;
+      if (!ACTIVE_STAGES.includes(stage)) return false;
+      const stat = wbsStats[p.id];
+      return stat && stat.delayed > 0;
+    }).length
+  ), [projects, wbsStats]);
 
   // 전체 진척률 = 전체 WBS의 actual_progress 평균 (프로젝트 가중 없이 WBS 단위 균등 평균)
   const overallProgress = useMemo(() => {

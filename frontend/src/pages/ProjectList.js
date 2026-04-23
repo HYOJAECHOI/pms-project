@@ -459,8 +459,13 @@ export default function ProjectList({ user }) {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  // 프로젝트의 WBS 중 지연 항목이 1개라도 있으면 지연 프로젝트
-  const isDelayed = (p) => (wbsDelayMap[p.id] || 0) > 0;
+  // 프로젝트의 WBS 중 지연 항목이 1개라도 있으면 지연 프로젝트.
+  // 단, 완료·이력(실주/제안포기) 단계 프로젝트는 지연 계산에서 제외 — 이미 종결된 건이므로.
+  const isDelayed = (p) => {
+    const stage = stageOf(p);
+    if (!ACTIVE_STAGES.includes(stage)) return false;
+    return (wbsDelayMap[p.id] || 0) > 0;
+  };
 
   const visibleOrgs = useMemo(() => {
     // 최상위(parent_id=null)가 정확히 1개면 그 루트를 숨기고 자식들만 표시.

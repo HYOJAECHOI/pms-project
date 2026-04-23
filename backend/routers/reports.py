@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+import json
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from datetime import date
 from database import get_db
 import models
+from routers.activity_logs import extract_user_id, log_activity
 
 router = APIRouter()
 
@@ -104,7 +106,12 @@ def get_pm_reports(project_id: int, db: Session = Depends(get_db)):
 
 # 승인 (WBS 자동 업데이트)
 @router.put("/reports/{report_id}/approve")
-def approve_report(report_id: int, pm_comment: str = None, db: Session = Depends(get_db)):
+def approve_report(
+    report_id: int,
+    request: Request,
+    pm_comment: str = None,
+    db: Session = Depends(get_db),
+):
     report = db.query(models.WorkReport).filter(models.WorkReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="보고를 찾을 수 없어요.")
@@ -114,6 +121,10 @@ def approve_report(report_id: int, pm_comment: str = None, db: Session = Depends
     wbs = db.query(models.WBSItem).filter(models.WBSItem.id == report.wbs_id).first()
     if not wbs:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+
+    # 변경 전 스냅샷 (ActivityLog용)
+    old_status = wbs.status
+    old_actual_progress = wbs.actual_progress
 
     if report.report_type == "진척보고":
         if report.requested_progress is not None:
@@ -135,6 +146,29 @@ def approve_report(report_id: int, pm_comment: str = None, db: Session = Depends
     report.status = "승인"
     if pm_comment is not None:
         report.pm_comment = pm_comment
+
+    # WBS 변경 시 ActivityLog 기록
+    actor_user_id = extract_user_id(request)
+    if wbs.status != old_status:
+        log_activity(
+            db,
+            project_id=wbs.project_id,
+            wbs_id=wbs.id,
+            actor_user_id=actor_user_id,
+            action_type="wbs_status_changed",
+            before_json=json.dumps({"status": old_status, "source": "report_approve"}, ensure_ascii=False),
+            after_json=json.dumps({"status": wbs.status, "report_id": report.id}, ensure_ascii=False),
+        )
+    if wbs.actual_progress != old_actual_progress:
+        log_activity(
+            db,
+            project_id=wbs.project_id,
+            wbs_id=wbs.id,
+            actor_user_id=actor_user_id,
+            action_type="progress_updated",
+            before_json=json.dumps({"actual_progress": old_actual_progress, "source": "report_approve"}, ensure_ascii=False),
+            after_json=json.dumps({"actual_progress": wbs.actual_progress, "report_id": report.id}, ensure_ascii=False),
+        )
 
     db.commit()
     db.refresh(report)

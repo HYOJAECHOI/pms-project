@@ -1,8 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException
+import json
+import os
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from datetime import date
 import models
+from routers.activity_logs import extract_user_id, log_activity
+
+UPLOAD_ROOT_ABS = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
+)
+
+
+def _safe_unlink_upload(filepath: str):
+    """UPLOAD_ROOT 하위 경로인지 확인 후 실제 파일 삭제. 경로이탈·없는파일은 무시."""
+    if not filepath:
+        return
+    try:
+        abs_path = os.path.abspath(filepath)
+    except Exception:
+        return
+    if not (abs_path == UPLOAD_ROOT_ABS or abs_path.startswith(UPLOAD_ROOT_ABS + os.sep)):
+        return
+    if os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+        except OSError:
+            pass
 
 router = APIRouter()
 
@@ -181,10 +205,47 @@ def get_wbs(project_id: int, db: Session = Depends(get_db)):
         })
     return result
 
+# WBS 단일 조회 (상세 모달 등에서 최신 데이터 fetch용)
+@router.get("/wbs/{wbs_id}")
+def get_wbs_item(wbs_id: int, db: Session = Depends(get_db)):
+    item = db.query(models.WBSItem).filter(models.WBSItem.id == wbs_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+
+    assignees = _list_assignees(item.id, db)
+    if not assignees and item.assignee_id:
+        u = db.query(models.User).filter(models.User.id == item.assignee_id).first()
+        if u:
+            assignees = [{"user_id": u.id, "name": u.name}]
+    first = assignees[0] if assignees else None
+
+    return {
+        "id": item.id,
+        "project_id": item.project_id,
+        "parent_id": item.parent_id,
+        "level": item.level,
+        "wbs_number": item.wbs_number,
+        "title": item.title,
+        "assignee_id": first["user_id"] if first else item.assignee_id,
+        "assignee_name": first["name"] if first else None,
+        "assignees": assignees,
+        "status": item.status,
+        "plan_start_date": str(item.plan_start_date) if item.plan_start_date else None,
+        "plan_end_date": str(item.plan_end_date) if item.plan_end_date else None,
+        "actual_start_date": str(item.actual_start_date) if item.actual_start_date else None,
+        "actual_end_date": str(item.actual_end_date) if item.actual_end_date else None,
+        "plan_progress": item.plan_progress,
+        "actual_progress": item.actual_progress,
+        "weight": item.weight,
+        "deliverable": item.deliverable,
+    }
+
+
 # WBS 항목 수정
 @router.put("/wbs/{item_id}")
 def update_wbs_item(
     item_id: int,
+    request: Request,
     title: str = None,
     assignee_id: int = None,
     assignee_ids: str = None,
@@ -205,6 +266,10 @@ def update_wbs_item(
     item = db.query(models.WBSItem).filter(models.WBSItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
+
+    # 변경 전 값 스냅샷 (ActivityLog용)
+    old_status = item.status
+    old_actual_progress = item.actual_progress
 
     if title is not None: item.title = title
     if status is not None: item.status = status
@@ -228,6 +293,29 @@ def update_wbs_item(
     elif assignee_id is not None:
         _set_assignees(item.id, [assignee_id], db)
 
+    # 상태/진척 변경 시 ActivityLog 자동 기록
+    actor_user_id = extract_user_id(request)
+    if status is not None and status != old_status:
+        log_activity(
+            db,
+            project_id=item.project_id,
+            wbs_id=item.id,
+            actor_user_id=actor_user_id,
+            action_type="wbs_status_changed",
+            before_json=json.dumps({"status": old_status}, ensure_ascii=False),
+            after_json=json.dumps({"status": item.status}, ensure_ascii=False),
+        )
+    if actual_progress is not None and actual_progress != old_actual_progress:
+        log_activity(
+            db,
+            project_id=item.project_id,
+            wbs_id=item.id,
+            actor_user_id=actor_user_id,
+            action_type="progress_updated",
+            before_json=json.dumps({"actual_progress": old_actual_progress}, ensure_ascii=False),
+            after_json=json.dumps({"actual_progress": item.actual_progress}, ensure_ascii=False),
+        )
+
     db.commit()
     db.refresh(item)
     return {
@@ -248,7 +336,53 @@ def delete_wbs_item(item_id: int, db: Session = Depends(get_db)):
     item = db.query(models.WBSItem).filter(models.WBSItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="WBS 항목을 찾을 수 없어요.")
-    db.query(models.WBSAssignee).filter(models.WBSAssignee.wbs_id == item_id).delete()
+
+    # 1) WBS 산출물 파일 (파일시스템 실물도 제거)
+    file_rows = db.query(models.WBSFile).filter(models.WBSFile.wbs_id == item_id).all()
+    for f in file_rows:
+        _safe_unlink_upload(f.filepath)
+    db.query(models.WBSFile).filter(
+        models.WBSFile.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 2) 업무보고
+    db.query(models.WorkReport).filter(
+        models.WorkReport.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 3) 댓글 (자기참조 FK가 있으므로 parent 참조를 먼저 해제)
+    db.query(models.WBSComment).filter(
+        models.WBSComment.wbs_id == item_id
+    ).update({models.WBSComment.parent_comment_id: None}, synchronize_session=False)
+    db.query(models.WBSComment).filter(
+        models.WBSComment.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 4-5) 지시 수신 → 지시
+    instruction_ids = [
+        i.id for i in db.query(models.WBSInstruction)
+        .filter(models.WBSInstruction.wbs_id == item_id)
+        .all()
+    ]
+    if instruction_ids:
+        db.query(models.WBSInstructionReceipt).filter(
+            models.WBSInstructionReceipt.instruction_id.in_(instruction_ids)
+        ).delete(synchronize_session=False)
+    db.query(models.WBSInstruction).filter(
+        models.WBSInstruction.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 6) 활동 이력
+    db.query(models.ActivityLog).filter(
+        models.ActivityLog.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 7) 담당자
+    db.query(models.WBSAssignee).filter(
+        models.WBSAssignee.wbs_id == item_id
+    ).delete(synchronize_session=False)
+
+    # 8) WBS 본체
     db.delete(item)
     db.commit()
     return {"message": "WBS 항목이 삭제됐어요."}

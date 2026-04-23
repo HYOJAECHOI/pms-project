@@ -81,6 +81,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 새 WBS 필드를 추가하면 `models.py`, `routers/wbs.py`의 create/update 쿼리 파라미터, `get_wbs`의 응답 dict, 프론트 입력/표시 세 군데를 모두 동기화해야 함.
 - 스키마 변경 시 Alembic 마이그레이션을 생성해 적용 (상단 "DB 마이그레이션" 섹션 참고). `pms.db`를 수동으로 지우거나 `create_all`에 의존하지 말 것.
 
+## WBS 협업 설계 원칙
+- WBS = 프로젝트 전체 조율 도구. 계획/실적/진척을 조직 단위로 붙잡는 지도.
+- 내 업무 = WBS에 할당된 작업을 개인이 실행하는 공간. 같은 데이터, 다른 렌즈.
+- 역할별 관점:
+  - 사원: 할당된 WBS 작업 실행 / 메모 남기기 / 지시 이행
+  - PM: 담당 프로젝트 WBS 조율 / 지시 발행 / 보고 검토
+  - 본부장: 본부 전체 현황 파악 / 이슈 중심 의사결정
+- 보고 철학: 평소 꾸준한 기록을 AI가 자동으로 요약해 보고 생성 (2단계 목표)
+- `WBSDetailModal`은 간트차트와 내 업무 양쪽에서 동일하게 사용 — 진입 지점만 다를 뿐 같은 UI/동작
+- 협업 데이터 테이블:
+  - `wbs_comments` (memo/question/answer/progress_note, memo_category로 일일업무/이슈/다음액션/참고 구분)
+  - `wbs_instructions` + `wbs_instruction_receipts` (PM/PL 발행, 수신자별 상태 추적)
+  - `activity_logs` (시스템 자동 기록 — status/progress/instruction/comment 이벤트)
+  - 프로젝트 레벨 댓글은 기존 `project_comments` 유지 (WBS 댓글과 별도 축)
+
 ## 에이전트 역할 분담
 - 기획/설계/분해: Claude (claude.ai) - 방향 결정
 - 실제 코드 수정: Claude Code (VS Code PowerShell)
