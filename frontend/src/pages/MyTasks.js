@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Typography, Card, Tag, Progress, Row, Col, Empty, message, Button,
-  Space, Collapse, Checkbox, Input,
+  Typography, Card, Tag, Progress, Empty, message, Button, Modal, Input,
+  Collapse, Badge,
 } from 'antd';
-import { PlusOutlined, CheckCircleOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, DoubleRightOutlined } from '@ant-design/icons';
+import {
+  DndContext, PointerSensor, useSensor, useSensors,
+  useDraggable, useDroppable, closestCorners,
+} from '@dnd-kit/core';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import WBSDetailModal from '../components/WBSDetailModal';
 
 const { Title, Text } = Typography;
-const { TextArea } = Input;
 
 // WBSAssignee에 내가 포함돼 있으면 내 업무로 간주. 배열이 비어있으면 legacy assignee_id로 판정.
 const isMineWbs = (w, userId) => {
@@ -37,29 +40,31 @@ const dDayInfo = (planEnd) => {
   return { text: `D-${diff}`, color: '#595959', background: '#fafafa' };
 };
 
+const KANBAN_COLUMNS = [
+  { key: '할일',     bg: '#fafafa', border: '#d9d9d9' },
+  { key: '수행예정', bg: '#e6f4ff', border: '#91caff' },
+  { key: '종료',     bg: '#f6ffed', border: '#b7eb8f' },
+  { key: '완료보고', bg: '#fff7e6', border: '#ffd591' },
+];
+
 export default function MyTasks({ user }) {
   const [myWbs, setMyWbs] = useState([]);
   const [projects, setProjects] = useState([]); // 종료 제외된 활성 프로젝트
   const [myInstructions, setMyInstructions] = useState([]);
+  const [workPlans, setWorkPlans] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [wbsDetailTarget, setWbsDetailTarget] = useState(null);
   const [wbsDetailMembers, setWbsDetailMembers] = useState([]);
   const [wbsDetailTab, setWbsDetailTab] = useState('기본정보');
 
-  const [checkedItems, setCheckedItems] = useState({});  // { wbs_id: bool }
-  const [memoOpen, setMemoOpen] = useState(null);         // wbs_id or null
-  const [memoText, setMemoText] = useState('');
-  const [hoveredId, setHoveredId] = useState(null);       // 전체 카드 hover (prefix 키 사용)
+  const [finishTarget, setFinishTarget] = useState(null); // 종료 이동 대기중인 plan
+  const [finishMemo, setFinishMemo] = useState('');
 
-  const [workPlans, setWorkPlans] = useState([]);          // 오늘의 계획 목록
-  const [addingPlan, setAddingPlan] = useState(null);      // 계획 추가 중인 wbs_id (로딩 상태)
+  const [hoveredId, setHoveredId] = useState(null); // 프로젝트/완료 카드 hover
 
-  const instructionRef = useRef(null);
-  const todayRef = useRef(null);
-  const projectRef = useRef(null);
-  const planRef = useRef(null);
   const navigate = useNavigate();
+  const initialSyncRef = useRef(false);
 
   // ===== getDisplayStatus (기존 로직 유지) =====
   const getDisplayStatus = (item) => {
@@ -92,7 +97,7 @@ export default function MyTasks({ user }) {
   };
 
   // ===== 데이터 로딩 =====
-  const refreshMyWbs = async () => {
+  const refreshMyWbs = useCallback(async () => {
     try {
       const res = await api.get('/projects');
       const activeProjects = (res.data || []).filter(p => p.status !== '종료');
@@ -111,72 +116,53 @@ export default function MyTasks({ user }) {
     } catch {
       message.error('데이터를 불러오지 못했어요');
     }
-  };
+  }, [user]);
 
-  const refreshMyInstructions = async () => {
+  const refreshMyInstructions = useCallback(async () => {
     try {
       const res = await api.get('/my-instructions');
       setMyInstructions(res.data || []);
     } catch {
       setMyInstructions([]);
     }
-  };
+  }, []);
 
-  const fetchWorkPlans = async () => {
+  const fetchWorkPlans = useCallback(async () => {
     try {
       const res = await api.get('/work-plans', { params: { date: todayISO() } });
       setWorkPlans(res.data || []);
     } catch {
       setWorkPlans([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
     setLoading(true);
+    initialSyncRef.current = false;
     Promise.all([refreshMyWbs(), refreshMyInstructions(), fetchWorkPlans()])
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, refreshMyWbs, refreshMyInstructions, fetchWorkPlans]);
 
   // ===== 파생 =====
-  const today = todayISO();
-
-  const todoList = useMemo(() => {
-    // 미완료 내 WBS 전부 포함. plan_end_date 오름차순 (지연→오늘→미래), 날짜 없으면 맨 뒤.
-    return myWbs
-      .filter(w => w.status !== '완료')
-      .sort((a, b) => {
-        if (!a.plan_end_date && !b.plan_end_date) return 0;
-        if (!a.plan_end_date) return 1;
-        if (!b.plan_end_date) return -1;
-        return a.plan_end_date.localeCompare(b.plan_end_date);
-      });
-  }, [myWbs]);
-
-  const todayDueCount = useMemo(
-    () => myWbs.filter(w => w.plan_end_date === today && w.status !== '완료' && !w.actual_end_date).length,
-    [myWbs, today]
-  );
-  const weekDueCount = useMemo(
-    () => myWbs.filter(w => {
-      if (w.status === '완료' || w.actual_end_date || !w.plan_end_date) return false;
-      const diff = daysBetween(w.plan_end_date, today);
-      return diff >= 0 && diff <= 7;
-    }).length,
-    [myWbs, today]
-  );
-  const delayedCount = useMemo(
-    () => myWbs.filter(w => w.plan_end_date && w.plan_end_date < today && w.status !== '완료' && !w.actual_end_date).length,
-    [myWbs, today]
-  );
-  // open/acknowledged만 활성 지시로 간주. 카드 카운트와 섹션 목록 공용.
   const activeInstructions = useMemo(
     () => myInstructions.filter(i => ['open', 'acknowledged'].includes(i.status)),
     [myInstructions]
   );
+
+  const wbsById = useMemo(() => {
+    const m = {};
+    myWbs.forEach(w => { m[w.id] = w; });
+    return m;
+  }, [myWbs]);
+
+  const instructionByWbsId = useMemo(() => {
+    const m = {};
+    activeInstructions.forEach(i => { if (i.wbs_id && !m[i.wbs_id]) m[i.wbs_id] = i; });
+    return m;
+  }, [activeInstructions]);
 
   // 내 참여 프로젝트: 내 WBS가 있거나 내가 PM인 프로젝트 (완료/종료 제외)
   const myProjectList = useMemo(() => {
@@ -210,9 +196,56 @@ export default function MyTasks({ user }) {
       .sort((a, b) => (b.actual_end_date || '').localeCompare(a.actual_end_date || ''));
   }, [myWbs]);
 
-  // ===== 상호작용 핸들러 =====
-  const scrollToRef = (ref) => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 컬럼별 분류 + 정렬 ('할일'은 skipped를 맨 아래로)
+  const plansByColumn = useMemo(() => {
+    const map = { '할일': [], '수행예정': [], '종료': [], '완료보고': [] };
+    workPlans.forEach(p => {
+      const col = map[p.column] ? p.column : '할일';
+      map[col].push(p);
+    });
+    Object.keys(map).forEach(k => {
+      map[k].sort((a, b) => {
+        if (k === '할일') {
+          const aSkip = a.status === 'skipped' ? 1 : 0;
+          const bSkip = b.status === 'skipped' ? 1 : 0;
+          if (aSkip !== bSkip) return aSkip - bSkip;
+        }
+        return (a.id || 0) - (b.id || 0);
+      });
+    });
+    return map;
+  }, [workPlans]);
 
+  // ===== 자동 동기화: 미등록 WBS/지시사항을 '할일' 컬럼에 POST =====
+  useEffect(() => {
+    if (!user?.id || loading || initialSyncRef.current) return;
+    const existing = new Set(workPlans.map(p => p.wbs_id));
+    const missing = [];
+    myWbs.forEach(w => {
+      if (w.status !== '완료' && !existing.has(w.id)) missing.push(w.id);
+    });
+    activeInstructions.forEach(i => {
+      if (i.wbs_id && !existing.has(i.wbs_id) && !missing.includes(i.wbs_id)) {
+        missing.push(i.wbs_id);
+      }
+    });
+
+    initialSyncRef.current = true; // 첫 동기화 1회만
+    if (missing.length === 0) return;
+
+    (async () => {
+      for (const wbs_id of missing) {
+        try {
+          await api.post('/work-plans', null, {
+            params: { wbs_id, plan_date: todayISO(), column: '할일' },
+          });
+        } catch { /* 중복/권한 에러 등 무시 */ }
+      }
+      await fetchWorkPlans();
+    })();
+  }, [user, loading, myWbs, activeInstructions, workPlans, fetchWorkPlans]);
+
+  // ===== 상호작용 핸들러 =====
   const openWbsDetailForItem = async (wbs, tab = '기본정보') => {
     try {
       const res = await api.get(`/projects/${wbs.project_id}/members`);
@@ -224,101 +257,88 @@ export default function MyTasks({ user }) {
     setWbsDetailTarget(wbs);
   };
 
-  const openInstructionDetail = async (ins) => {
-    const fromAll = myWbs.find(w => w.id === ins.wbs_id);
-    const wbsItem = fromAll || {
-      id: ins.wbs_id, title: ins.wbs_title, wbs_number: ins.wbs_number,
-      level: ins.wbs_level, project_id: ins.project_id, project_name: ins.project_name,
+  const openPlanDetail = (plan) => {
+    const wbs = wbsById[plan.wbs_id];
+    const ins = instructionByWbsId[plan.wbs_id];
+    const wbsItem = wbs || {
+      id: plan.wbs_id,
+      title: plan.wbs_title,
+      project_id: plan.project_id,
+      project_name: plan.project_name,
     };
-    openWbsDetailForItem(wbsItem, '지시사항');
+    openWbsDetailForItem(wbsItem, ins ? '지시사항' : '기본정보');
   };
 
-  const handleCheck = (wbsId, checked) => {
-    setCheckedItems(prev => ({ ...prev, [wbsId]: checked }));
-    if (checked) {
-      setMemoOpen(wbsId);
-      setMemoText('');
-    } else if (memoOpen === wbsId) {
-      setMemoOpen(null);
-      setMemoText('');
+  // 성공 시 재조회까지 완료. 실패 시 에러를 throw — 호출측에서 처리.
+  const moveToColumn = async (plan, targetCol, memo) => {
+    const params = { column: targetCol };
+    if (memo !== undefined) params.memo = memo;
+    // skipped 카드가 '할일' 외 컬럼으로 나가면 status 모순 제거
+    if (plan.status === 'skipped' && targetCol !== '할일') {
+      params.status = 'planned';
     }
+    await api.put(`/work-plans/${plan.id}`, null, { params });
+    await fetchWorkPlans();
   };
 
-  const handleSaveMemo = async (w) => {
-    if (!memoText.trim()) {
-      message.warning('메모를 입력해 주세요');
-      return;
-    }
+  const handleCheckV = async (plan) => {
     try {
-      await api.post(`/wbs/${w.id}/comments`, null, {
-        params: { content: memoText, comment_type: 'memo', memo_category: 'daily_work' },
-      });
-      message.success('메모가 저장됐어요');
-      setMemoOpen(null);
-      setMemoText('');
+      await moveToColumn(plan, '수행예정');
     } catch {
-      message.error('메모 저장 실패');
+      message.error('이동 실패');
     }
   };
 
-  // ===== work_plans 핸들러 =====
-  const handleAddPlan = async (w) => {
-    if (workPlans.some(p => p.wbs_id === w.id)) {
-      message.info('이미 오늘 계획에 있어요');
-      return;
-    }
-    setAddingPlan(w.id);
+  const handleMoveToReport = async (plan) => {
     try {
-      await api.post('/work-plans', null, {
-        params: { wbs_id: w.id, plan_date: todayISO() },
-      });
-      message.success('오늘의 계획에 추가됐어요');
-      await fetchWorkPlans();
+      await moveToColumn(plan, '완료보고');
     } catch {
-      message.error('계획 추가 실패');
-    } finally {
-      setAddingPlan(null);
+      message.error('이동 실패');
     }
   };
 
-  const handlePlanDone = async (plan) => {
-    // '완료' ↔ '완료취소' 토글: done이면 planned로 되돌림
-    const next = plan.status === 'done' ? 'planned' : 'done';
+  const handleCheckX = async (plan) => {
+    const nextStatus = plan.status === 'skipped' ? 'planned' : 'skipped';
     try {
-      await api.put(`/work-plans/${plan.id}`, null, { params: { status: next } });
+      await api.put(`/work-plans/${plan.id}`, null, { params: { status: nextStatus } });
       await fetchWorkPlans();
     } catch {
       message.error('상태 변경 실패');
     }
   };
 
-  const handlePlanSkip = async (plan) => {
-    // '건너뛰기' ↔ '건너뛰기취소' 토글
-    const next = plan.status === 'skipped' ? 'planned' : 'skipped';
+  const handleDragEnd = (event) => {
+    const { active, over } = event;
+    if (!over) return;
+    const planId = Number(String(active.id).replace('plan-', ''));
+    const targetCol = String(over.id).replace('col-', '');
+    const plan = workPlans.find(p => p.id === planId);
+    if (!plan || !targetCol || plan.column === targetCol) return;
+
+    if (targetCol === '종료') {
+      setFinishTarget(plan);
+      setFinishMemo(plan.memo || '');
+      return;
+    }
+    moveToColumn(plan, targetCol).catch(() => message.error('이동 실패'));
+  };
+
+  const handleFinishOk = async () => {
+    if (!finishTarget) return;
+    const memo = finishMemo.trim();
     try {
-      await api.put(`/work-plans/${plan.id}`, null, { params: { status: next } });
-      await fetchWorkPlans();
+      await moveToColumn(finishTarget, '종료', memo || undefined);
+      setFinishTarget(null);
+      setFinishMemo('');
     } catch {
-      message.error('상태 변경 실패');
+      message.error('이동 실패');
+      // 실패 시 모달 유지 — 재시도 가능
     }
   };
 
-  const handlePlanMemo = async (plan, memo) => {
-    try {
-      await api.put(`/work-plans/${plan.id}`, null, { params: { memo } });
-      await fetchWorkPlans();
-    } catch {
-      message.error('메모 저장 실패');
-    }
-  };
-
-  const handleRemovePlan = async (plan) => {
-    try {
-      await api.delete(`/work-plans/${plan.id}`);
-      await fetchWorkPlans();
-    } catch {
-      message.error('제거 실패');
-    }
+  const handleFinishCancel = () => {
+    setFinishTarget(null);
+    setFinishMemo('');
   };
 
   const wbsDetailProject = useMemo(
@@ -332,320 +352,133 @@ export default function MyTasks({ user }) {
     await fetchWorkPlans();
   };
 
-  // ===== 렌더 =====
-  // 공통 hover 카드 스타일 (checked 옵션 지원)
-  const getCardStyle = (hoverKey, checked = false) => {
+  // ===== 공통 hover 카드 스타일 (프로젝트/완료 섹션용) =====
+  const getCardStyle = (hoverKey) => {
     const isHovered = hoveredId === hoverKey;
     const base = {
       marginBottom: 8,
       cursor: 'pointer',
       transition: 'background-color 0.15s, border-color 0.15s',
     };
-    if (checked) return { ...base, backgroundColor: '#e6f4ff', border: '1px solid #1677ff' };
     if (isHovered) return { ...base, backgroundColor: '#f0f7ff' };
     return base;
   };
 
-  const renderTodoItem = (w) => {
-    const dday = dDayInfo(w.plan_end_date);
-    const isChecked = !!checkedItems[w.id];
-    const hoverKey = `todo-${w.id}`;
-    const isPlanned = workPlans.some(p => p.wbs_id === w.id);
-    const stop = (e) => e.stopPropagation();
-
-    return (
-      <Card
-        key={w.id}
-        size="small"
-        style={getCardStyle(hoverKey, isChecked)}
-        onMouseEnter={() => setHoveredId(hoverKey)}
-        onMouseLeave={() => setHoveredId(null)}
-        onClick={() => openWbsDetailForItem(w)}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span onClick={stop}>
-            <Checkbox checked={isChecked} onChange={(e) => handleCheck(w.id, e.target.checked)} />
-          </span>
-          <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-            <strong style={{ fontSize: 13 }}>{w.title}</strong>
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>· {w.project_name}</Text>
-          </div>
-          {dday && (
-            <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color, fontWeight: 600 }}>
-              {dday.text}
-            </Tag>
-          )}
-          <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
-          <span onClick={stop}>
-            <Button
-              size="small"
-              type={isPlanned ? 'primary' : 'default'}
-              icon={<PlusOutlined />}
-              loading={addingPlan === w.id}
-              onClick={(e) => { e.stopPropagation(); handleAddPlan(w); }}
-            >
-              {isPlanned ? '계획됨' : '오늘 계획'}
-            </Button>
-          </span>
-        </div>
-        {memoOpen === w.id && (
-          <div
-            style={{ padding: '8px 4px 4px 32px', marginTop: 8, background: '#fafafa', borderRadius: 4 }}
-            onClick={stop}
-          >
-            <TextArea
-              rows={1} autoSize={{ minRows: 1, maxRows: 3 }}
-              placeholder={`"${w.title}" 오늘 무슨 일을 했나요?`}
-              value={memoText}
-              onChange={(e) => setMemoText(e.target.value)}
-              style={{ marginBottom: 6 }}
-            />
-            <Space>
-              <Button size="small" type="primary" onClick={() => handleSaveMemo(w)}>저장</Button>
-              <Button size="small" onClick={() => { setMemoOpen(null); setMemoText(''); }}>닫기</Button>
-            </Space>
-          </div>
-        )}
-      </Card>
-    );
-  };
-
-  const summaryCardStyle = { cursor: 'pointer' };
-  const summaryCards = [
-    { key: 'today', title: '🔴 오늘 마감', value: todayDueCount, color: '#ff4d4f', targetRef: todayRef },
-    { key: 'week',  title: '🟡 이번 주 마감', value: weekDueCount, color: '#fa8c16', targetRef: todayRef },
-    { key: 'plan',  title: '📋 오늘의 계획', value: workPlans.length, color: '#13c2c2', targetRef: planRef },
-    { key: 'ins',   title: '📬 새 지시사항', value: activeInstructions.length, color: '#1677ff', targetRef: instructionRef },
-    { key: 'delay', title: '⚠️ 지연 중', value: delayedCount, color: '#a8071a', targetRef: todayRef },
-  ];
+  // ===== 드래그 센서 =====
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
 
   return (
     <>
       <Title level={4} style={{ marginBottom: 16 }}>📌 내 업무</Title>
 
-      {/* 1. 요약 카드 */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        {summaryCards.map(c => (
-          <Col flex="1 1 0" key={c.key} style={{ minWidth: 0 }}>
-            <Card hoverable style={summaryCardStyle} onClick={() => scrollToRef(c.targetRef)}>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{c.title}</div>
-              <div style={{ fontSize: 28, fontWeight: 600, color: c.color }}>{c.value}</div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-
-      {/* 1.5 오늘의 계획 */}
-      <div ref={planRef}>
-        <Card title={<span>📋 오늘의 계획 ({workPlans.length}건)</span>} style={{ marginBottom: 16 }}>
-          {workPlans.length === 0 ? (
-            <Text type="secondary">오늘의 할일에서 작업을 선택해주세요</Text>
-          ) : (
-            workPlans.map(plan => (
-              <Card
-                size="small"
-                key={plan.id}
-                style={{
-                  marginBottom: 8,
-                  backgroundColor:
-                    plan.status === 'done' ? '#f6ffed' :
-                    plan.status === 'skipped' ? '#f5f5f5' : '#fff',
-                  border: plan.status === 'done' ? '1px solid #b7eb8f' :
-                          plan.status === 'skipped' ? '1px solid #d9d9d9' :
-                          '1px solid #d9d9d9',
-                }}
-              >
-                <Row align="middle" justify="space-between" gutter={8}>
-                  <Col flex="auto" style={{ minWidth: 0 }}>
-                    <Space>
-                      {plan.status === 'done' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
-                      {plan.status === 'skipped' && <MinusCircleOutlined style={{ color: '#bbb' }} />}
-                      <Text
-                        strong
-                        ellipsis
-                        delete={plan.status === 'skipped'}
-                        style={{
-                          maxWidth: 200,
-                          color: plan.status === 'done' ? '#52c41a'
-                            : plan.status === 'skipped' ? '#bbb' : undefined,
-                        }}
-                      >
-                        {plan.wbs_title}
-                      </Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>{plan.project_name}</Text>
-                    </Space>
-                  </Col>
-                  <Col>
-                    <Space>
-                      {plan.status === 'planned' && (
-                        <>
-                          <Button size="small" type="primary" onClick={() => handlePlanDone(plan)}>완료</Button>
-                          <Button size="small" onClick={() => handlePlanSkip(plan)}>건너뛰기</Button>
-                        </>
-                      )}
-                      {plan.status === 'done' && (
-                        <Button size="small" onClick={() => handlePlanDone(plan)}>완료취소</Button>
-                      )}
-                      {plan.status === 'skipped' && (
-                        <Button size="small" onClick={() => handlePlanSkip(plan)}>건너뛰기취소</Button>
-                      )}
-                      <Button size="small" danger onClick={() => handleRemovePlan(plan)}>제거</Button>
-                    </Space>
-                  </Col>
-                </Row>
-                <Row style={{ marginTop: 8 }}>
-                  <Col flex="auto">
-                    <Input.TextArea
-                      placeholder="메모 남기기 (선택)"
-                      size="small"
-                      autoSize
-                      defaultValue={plan.memo || ''}
-                      onBlur={(e) => {
-                        if (e.target.value !== (plan.memo || '')) {
-                          handlePlanMemo(plan, e.target.value);
-                        }
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </Col>
-                </Row>
-              </Card>
-            ))
-          )}
-        </Card>
-      </div>
-
-      {/* 2. 새 지시사항 */}
-      <div ref={instructionRef}>
-        {activeInstructions.length > 0 && (
-          <Card style={{ marginBottom: 16, borderColor: '#1677ff' }}>
-            <Title level={5} style={{ color: '#1677ff', margin: 0, marginBottom: 8 }}>
-              📬 새 지시사항 ({activeInstructions.length}건)
-            </Title>
-            {activeInstructions.map(ins => {
-              const priColor = { low: 'default', normal: 'blue', high: 'orange', urgent: 'red' }[ins.priority] || 'default';
-              const priLabel = { low: '낮음', normal: '보통', high: '높음', urgent: '긴급' }[ins.priority] || ins.priority;
-              const statColor = { open: 'default', acknowledged: 'blue', in_progress: 'orange' }[ins.status] || 'default';
-              const statLabel = { open: '미확인', acknowledged: '확인', in_progress: '진행중' }[ins.status] || ins.status;
-              const hoverKey = `ins-${ins.receipt_id}`;
-              return (
-                <Card
-                  key={ins.receipt_id}
-                  size="small"
-                  style={getCardStyle(hoverKey)}
-                  onMouseEnter={() => setHoveredId(hoverKey)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onClick={() => openInstructionDetail(ins)}
-                >
-                  <div style={{ fontSize: 12 }}>
-                    <Tag color={priColor}>{priLabel}</Tag>
-                    <Tag color={statColor}>{statLabel}</Tag>
-                    <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
-                      [{ins.project_name}] {ins.wbs_number} {ins.wbs_title}
-                    </Text>
-                    <strong>{ins.title}</strong>
-                    {ins.author_name && (
-                      <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>· {ins.author_name}</Text>
-                    )}
-                  </div>
-                </Card>
-              );
-            })}
-          </Card>
-        )}
-      </div>
-
-      {/* 3. 오늘의 할일 */}
-      <div ref={todayRef}>
-        <Card
-          title={<span>🎯 오늘의 할일 ({todoList.length}건)</span>}
-          style={{ marginBottom: 16 }}
-          loading={loading && myWbs.length === 0}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragEnd={handleDragEnd}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))',
+            gap: 12,
+            marginBottom: 24,
+            overflowX: 'auto',
+          }}
         >
-          {todoList.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="오늘 할 일이 없어요" />
-          ) : (
-            todoList.map(renderTodoItem)
-          )}
-        </Card>
-      </div>
-
-      {/* 4. 내 프로젝트 현황 */}
-      <div ref={projectRef}>
-        <Card
-          title={<span>🗂 내 프로젝트 현황 ({myProjectList.length}개)</span>}
-          style={{ marginBottom: 16 }}
-        >
-          {myProjectList.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="참여 중인 프로젝트가 없어요" />
-          ) : (
-            <Collapse
-              items={myProjectList.map(p => {
-                const wbsList = wbsByProject[p.id] || [];
-                const avg = projectAvgProgress(p.id);
-                return {
-                  key: String(p.id),
-                  label: (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
-                      <strong
-                        style={{ cursor: 'pointer', color: '#1677ff' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/projects/${p.id}`, { state: { from: '/my-tasks' } });
-                        }}
-                      >
-                        {p.name}
-                      </strong>
-                      {p.pipeline_stage && <Tag color="blue">{p.pipeline_stage}</Tag>}
-                      <Text type="secondary" style={{ fontSize: 12 }}>내 작업 {wbsList.length}개</Text>
-                      <div style={{ flex: 1, minWidth: 120, maxWidth: 240 }}>
-                        <Progress percent={avg} size="small" />
-                      </div>
-                    </div>
-                  ),
-                  children: wbsList.length === 0 ? (
-                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="할당된 WBS가 없어요" />
-                  ) : (
-                    <div>
-                      {wbsList.map(w => {
-                        const ds = getDisplayStatus(w);
-                        const dday = dDayInfo(w.plan_end_date);
-                        const hoverKey = `proj-${w.id}`;
-                        return (
-                          <Card
-                            key={w.id}
-                            size="small"
-                            style={getCardStyle(hoverKey)}
-                            onMouseEnter={() => setHoveredId(hoverKey)}
-                            onMouseLeave={() => setHoveredId(null)}
-                            onClick={() => openWbsDetailForItem(w)}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                              <span style={{ flex: 1, fontSize: 13 }}>
-                                <strong>{w.title}</strong>
-                                {w.wbs_number && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{w.wbs_number}</Text>}
-                              </span>
-                              <Tag color={ds.color}>{ds.text}</Tag>
-                              {dday && (
-                                <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color }}>
-                                  {dday.text}
-                                </Tag>
-                              )}
-                              <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
-                            </div>
-                          </Card>
-                        );
-                      })}
-                    </div>
-                  ),
-                };
-              })}
+          {KANBAN_COLUMNS.map(col => (
+            <KanbanColumn
+              key={col.key}
+              col={col}
+              plans={plansByColumn[col.key] || []}
+              wbsById={wbsById}
+              instructionByWbsId={instructionByWbsId}
+              getDisplayStatus={getDisplayStatus}
+              onOpenDetail={openPlanDetail}
+              onCheckV={handleCheckV}
+              onCheckX={handleCheckX}
+              onMoveToReport={handleMoveToReport}
+              loading={loading}
             />
-          )}
-        </Card>
-      </div>
+          ))}
+        </div>
+      </DndContext>
 
-      {/* 5. 완료된 할일 (이번 달) */}
+      {/* 내 프로젝트 현황 */}
+      <Card
+        title={<span>🗂 내 프로젝트 현황 ({myProjectList.length}개)</span>}
+        style={{ marginBottom: 16 }}
+      >
+        {myProjectList.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="참여 중인 프로젝트가 없어요" />
+        ) : (
+          <Collapse
+            items={myProjectList.map(p => {
+              const wbsList = wbsByProject[p.id] || [];
+              const avg = projectAvgProgress(p.id);
+              return {
+                key: String(p.id),
+                label: (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+                    <strong
+                      style={{ cursor: 'pointer', color: '#1677ff' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}`, { state: { from: '/my-tasks' } });
+                      }}
+                    >
+                      {p.name}
+                    </strong>
+                    {p.pipeline_stage && <Tag color="blue">{p.pipeline_stage}</Tag>}
+                    <Text type="secondary" style={{ fontSize: 12 }}>내 작업 {wbsList.length}개</Text>
+                    <div style={{ flex: 1, minWidth: 120, maxWidth: 240 }}>
+                      <Progress percent={avg} size="small" />
+                    </div>
+                  </div>
+                ),
+                children: wbsList.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="할당된 WBS가 없어요" />
+                ) : (
+                  <div>
+                    {wbsList.map(w => {
+                      const ds = getDisplayStatus(w);
+                      const dday = dDayInfo(w.plan_end_date);
+                      const hoverKey = `proj-${w.id}`;
+                      return (
+                        <Card
+                          key={w.id}
+                          size="small"
+                          style={getCardStyle(hoverKey)}
+                          onMouseEnter={() => setHoveredId(hoverKey)}
+                          onMouseLeave={() => setHoveredId(null)}
+                          onClick={() => openWbsDetailForItem(w)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <span style={{ flex: 1, fontSize: 13 }}>
+                              <strong>{w.title}</strong>
+                              {w.wbs_number && <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{w.wbs_number}</Text>}
+                            </span>
+                            <Tag color={ds.color}>{ds.text}</Tag>
+                            {dday && (
+                              <Tag style={{ color: dday.color, background: dday.background, borderColor: dday.color }}>
+                                {dday.text}
+                              </Tag>
+                            )}
+                            <Progress percent={Math.round((w.actual_progress || 0) * 100)} size="small" style={{ width: 80 }} />
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                ),
+              };
+            })}
+          />
+        )}
+      </Card>
+
+      {/* 이번 달 완료된 할일 */}
       {completedThisMonth.length > 0 && (
         <Collapse
           style={{ marginBottom: 16 }}
@@ -683,6 +516,28 @@ export default function MyTasks({ user }) {
         />
       )}
 
+      {/* 종료 이동 메모 Modal */}
+      <Modal
+        title="종료 처리"
+        open={!!finishTarget}
+        onOk={handleFinishOk}
+        onCancel={handleFinishCancel}
+        okText="종료"
+        cancelText="취소"
+      >
+        <div style={{ marginBottom: 8 }}>
+          <Text type="secondary">
+            "{finishTarget?.wbs_title}" 작업을 '종료' 컬럼으로 옮깁니다. 마무리 메모는 선택입니다.
+          </Text>
+        </div>
+        <Input.TextArea
+          value={finishMemo}
+          onChange={(e) => setFinishMemo(e.target.value)}
+          placeholder="마무리 메모 (선택)"
+          autoSize={{ minRows: 3, maxRows: 6 }}
+        />
+      </Modal>
+
       {/* WBS 상세 모달 */}
       <WBSDetailModal
         visible={!!wbsDetailTarget}
@@ -695,5 +550,175 @@ export default function MyTasks({ user }) {
         onUpdate={onModalUpdate}
       />
     </>
+  );
+}
+
+// ===== 칸반 컬럼 =====
+function KanbanColumn({
+  col, plans, wbsById, instructionByWbsId, getDisplayStatus,
+  onOpenDetail, onCheckV, onCheckX, onMoveToReport, loading,
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `col-${col.key}` });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        background: col.bg,
+        border: `1px solid ${isOver ? '#1677ff' : col.border}`,
+        borderRadius: 8,
+        padding: 8,
+        minHeight: 320,
+        transition: 'border-color 0.15s',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '4px 6px 10px', fontWeight: 600,
+        }}
+      >
+        <span>{col.key}</span>
+        <Badge count={plans.length} showZero style={{ backgroundColor: '#8c8c8c' }} />
+      </div>
+
+      {plans.length === 0 && !loading && (
+        <div style={{ padding: 16, textAlign: 'center' }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>비어있어요</Text>
+        </div>
+      )}
+
+      {plans.map(plan => (
+        <KanbanCard
+          key={plan.id}
+          plan={plan}
+          wbs={wbsById[plan.wbs_id]}
+          instruction={instructionByWbsId[plan.wbs_id]}
+          columnKey={col.key}
+          getDisplayStatus={getDisplayStatus}
+          onOpenDetail={onOpenDetail}
+          onCheckV={onCheckV}
+          onCheckX={onCheckX}
+          onMoveToReport={onMoveToReport}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ===== 칸반 카드 =====
+function KanbanCard({
+  plan, wbs, instruction, columnKey, getDisplayStatus,
+  onOpenDetail, onCheckV, onCheckX, onMoveToReport,
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `plan-${plan.id}`,
+  });
+  const dragStyle = {
+    transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined,
+    opacity: isDragging ? 0.4 : 1,
+  };
+
+  const dday = wbs ? dDayInfo(wbs.plan_end_date) : null;
+  const ds = wbs ? getDisplayStatus(wbs) : null;
+  const isSkipped = plan.status === 'skipped';
+  const icon = instruction ? '📬' : '📋';
+
+  const cardStyle = {
+    marginBottom: 8,
+    cursor: 'grab',
+    backgroundColor: isSkipped ? '#f5f5f5' : '#fff',
+    opacity: isSkipped ? 0.6 : 1,
+  };
+
+  const stop = (e) => e.stopPropagation();
+
+  return (
+    <div ref={setNodeRef} style={dragStyle} {...attributes} {...listeners}>
+      <Card
+        size="small"
+        style={cardStyle}
+        onClick={() => onOpenDetail(plan)}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+          <span style={{ fontSize: 14, lineHeight: '20px' }}>{icon}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontWeight: 600, fontSize: 13,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                color: isSkipped ? '#bbb' : undefined,
+                textDecoration: isSkipped ? 'line-through' : 'none',
+              }}
+              title={plan.wbs_title}
+            >
+              {plan.wbs_title}
+            </div>
+            <div
+              style={{
+                fontSize: 11, color: '#888',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+              title={plan.project_name}
+            >
+              {plan.project_name}
+            </div>
+            <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {dday && (
+                <Tag
+                  style={{
+                    color: dday.color, background: dday.background,
+                    borderColor: dday.color, fontSize: 11, margin: 0,
+                  }}
+                >
+                  {dday.text}
+                </Tag>
+              )}
+              {ds && (
+                <Tag color={ds.color} style={{ fontSize: 11, margin: 0 }}>{ds.text}</Tag>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {columnKey === '할일' && (
+          <div
+            style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end', gap: 6 }}
+            onClick={stop}
+            onPointerDown={stop}
+          >
+            <Button
+              size="small"
+              type="primary"
+              icon={<CheckOutlined />}
+              onClick={(e) => { e.stopPropagation(); onCheckV(plan); }}
+              title="수행예정으로 이동"
+            />
+            <Button
+              size="small"
+              icon={<CloseOutlined />}
+              onClick={(e) => { e.stopPropagation(); onCheckX(plan); }}
+              title={isSkipped ? '건너뛰기 해제' : '건너뛰기'}
+            />
+          </div>
+        )}
+
+        {columnKey === '종료' && (
+          <div
+            style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end', gap: 6 }}
+            onClick={stop}
+            onPointerDown={stop}
+          >
+            <Button
+              size="small"
+              icon={<DoubleRightOutlined />}
+              onClick={(e) => { e.stopPropagation(); onMoveToReport(plan); }}
+              title="완료보고로 이동"
+            >
+              완료보고
+            </Button>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
