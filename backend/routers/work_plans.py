@@ -10,6 +10,7 @@ from routers.dependencies import require_project_member
 router = APIRouter()
 
 STATUSES = {"planned", "done", "skipped"}
+COLUMNS = {"할일", "수행예정", "종료", "완료보고"}
 
 
 def _parse_date(value) -> date_cls:
@@ -33,6 +34,7 @@ def _serialize(wp, wbs_map=None, project_map=None):
         "plan_date": wp.plan_date.isoformat() if wp.plan_date else None,
         "status": wp.status,
         "memo": wp.memo,
+        "column": wp.column,
         "created_at": wp.created_at.isoformat() if wp.created_at else None,
         "wbs_title": wbs.title if wbs else None,
         "project_id": wbs.project_id if wbs else None,
@@ -46,11 +48,18 @@ def create_work_plan(
     plan_date: str,
     request: Request,
     memo: str = None,
+    column: str = "할일",
     db: Session = Depends(get_db),
 ):
     user_id = extract_user_id(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="로그인이 필요해요.")
+
+    if column not in COLUMNS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"column은 {sorted(COLUMNS)} 중 하나여야 해요.",
+        )
 
     pdate = _parse_date(plan_date)
 
@@ -77,6 +86,7 @@ def create_work_plan(
         plan_date=pdate,
         status="planned",
         memo=memo,
+        column=column,
         created_at=datetime.utcnow(),
     )
     db.add(wp)
@@ -133,6 +143,7 @@ def update_work_plan(
     request: Request,
     status: str = None,
     memo: str = None,
+    column: str = None,
     db: Session = Depends(get_db),
 ):
     user_id = extract_user_id(request)
@@ -154,6 +165,13 @@ def update_work_plan(
         wp.status = status
     if memo is not None:
         wp.memo = memo
+    if column is not None:
+        if column not in COLUMNS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"column은 {sorted(COLUMNS)} 중 하나여야 해요.",
+            )
+        wp.column = column
 
     db.commit()
     db.refresh(wp)

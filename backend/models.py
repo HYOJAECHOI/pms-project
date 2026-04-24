@@ -218,4 +218,5 @@ class WorkPlan(Base):
     plan_date = Column(Date, nullable=False)
     status = Column(String, default="planned")  # planned/done/skipped
     memo = Column(String, nullable=True)
+    column = Column(String, default="할일")  # 할일/수행예정/종료/완료보고
     created_at = Column(DateTime, default=datetime.utcnow)
