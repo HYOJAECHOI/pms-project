@@ -48,7 +48,7 @@ export default function ProjectMembers() {
   const fetchProject = () => {
     api.get(`/projects/${id}`)
       .then((res) => {
-        setProjectOrgId(res.data.organization_id ?? null);
+        setProjectOrgId(res.data.department_id ?? null);
         setProjectPmId(res.data.pm_id ?? null);
       })
       .catch(() => {});

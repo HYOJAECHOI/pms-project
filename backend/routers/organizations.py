@@ -21,8 +21,7 @@ def _user_name(db: Session, user_id):
 
 
 def _validate_leader(leader_id: int, org_id: int, db: Session):
-    """leader_id 유저가 존재하고 해당 조직 소속인지 검증.
-    org_id는 포함관계 체크 기준 (같은 조직 소속이어야 본부장 가능).
+    """leader_id 유저가 존재하고 해당 조직 소속이며 직위가 '본부장'인지 검증.
     leader_id가 None이면 검증 스킵.
     """
     if leader_id is None:
@@ -34,6 +33,11 @@ def _validate_leader(leader_id: int, org_id: int, db: Session):
         raise HTTPException(
             status_code=400,
             detail="본부장은 해당 조직 소속이어야 합니다.",
+        )
+    if user.position != '본부장':
+        raise HTTPException(
+            status_code=400,
+            detail="본부장 직위를 가진 유저만 지정할 수 있어요.",
         )
 
 

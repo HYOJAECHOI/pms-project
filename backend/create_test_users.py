@@ -128,7 +128,7 @@ def ensure_projects(db, users, org):
                 start_date=spec["start_date"],
                 end_date=spec["end_date"],
                 pm_id=pm_user.id,
-                organization_id=org.id,
+                department_id=org.id,
                 client="테스트발주기관",
             )
             db.add(project)

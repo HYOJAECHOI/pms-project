@@ -482,7 +482,7 @@ export default function ProjectList({ user }) {
     const visibleIds = new Set(visibleOrgs.map((o) => o.id));
     const set = new Set();
     projects.forEach((p) => {
-      if (!visibleIds.has(p.organization_id)) return;
+      if (!visibleIds.has(p.department_id)) return;
       if (p.start_date) set.add(dayjs(p.start_date).year());
       if (p.end_date) set.add(dayjs(p.end_date).year());
     });
@@ -511,7 +511,7 @@ export default function ProjectList({ user }) {
 
     return visibleOrgs.map((org) => {
       const ps = projects.filter(
-        (p) => p.organization_id === org.id && projectInYear(p, selectedYear),
+        (p) => p.department_id === org.id && projectInYear(p, selectedYear),
       );
       const counts = {};
       BUCKETS.forEach((b) => {
@@ -560,7 +560,7 @@ export default function ProjectList({ user }) {
   const phase2Projects = useMemo(() => {
     if (selectedOrgId == null) return [];
     let list = projects.filter(
-      (p) => p.organization_id === selectedOrgId && projectInYear(p, selectedYear),
+      (p) => p.department_id === selectedOrgId && projectInYear(p, selectedYear),
     );
     if (delayedOnly) list = list.filter(isDelayed);
     return list;

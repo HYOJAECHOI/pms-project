@@ -125,7 +125,7 @@ const buildUpdateParams = (d) => {
     if (d[k] !== undefined && d[k] !== null) params[k] = d[k];
     else if (d[k] === '') params[k] = '';
   });
-  const ints = ['budget', 'win_amount', 'tech_score_ratio', 'price_score_ratio', 'organization_id'];
+  const ints = ['budget', 'win_amount', 'tech_score_ratio', 'price_score_ratio', 'department_id'];
   ints.forEach((k) => { if (d[k] != null && d[k] !== '') params[k] = d[k]; });
   // booleans (always send)
   params.joint_performance   = !!d.joint_performance;
@@ -739,6 +739,9 @@ export default function ProjectDetail() {
             fmtText(project.client),
             <Input value={draft?.client || ''} onChange={(e) => setField('client', e.target.value)} />,
           )}
+        </Descriptions.Item>
+        <Descriptions.Item label="소속 본부">
+          {fmtText(project.department_name)}
         </Descriptions.Item>
         <Descriptions.Item label="사업예산(추정)">
           {viewOrInput('budget',

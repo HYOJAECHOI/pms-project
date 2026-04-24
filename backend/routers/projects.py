@@ -20,7 +20,7 @@ def _iso(v):
 
 
 def _validate_department(department_id: int, db: Session):
-    """department_id 조직이 존재하고 '본부'(= parent_id 있는 하위 조직)인지 검증.
+    """department_id 조직이 존재하고 '본부'(= parent_id 있는 정식 하위 조직)인지 검증.
     최상위(회사) 혹은 임시팀(project_id 있음)은 본부로 허용하지 않음.
     department_id가 None이면 검증 스킵.
     """
@@ -36,6 +36,11 @@ def _validate_department(department_id: int, db: Session):
             status_code=400,
             detail="최상위 조직(회사)은 본부로 지정할 수 없어요.",
         )
+    if org.project_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="임시팀은 본부로 지정할 수 없어요.",
+        )
 
 
 def _serialize_project(p, db):
@@ -43,10 +48,6 @@ def _serialize_project(p, db):
     if p.pm_id:
         pm = db.query(models.User).filter(models.User.id == p.pm_id).first()
         pm_name = pm.name if pm else None
-    organization_name = None
-    if p.organization_id:
-        org = db.query(models.Organization).filter(models.Organization.id == p.organization_id).first()
-        organization_name = org.name if org else None
     department_name = None
     if p.department_id:
         dept = db.query(models.Organization).filter(models.Organization.id == p.department_id).first()
@@ -62,8 +63,6 @@ def _serialize_project(p, db):
         "original_end_date":   str(p.original_end_date) if p.original_end_date else None,
         "pm_id": p.pm_id,
         "pm_name": pm_name,
-        "organization_id": p.organization_id,
-        "organization_name": organization_name,
         "department_id": p.department_id,
         "department_name": department_name,
         "client": p.client,
@@ -113,7 +112,6 @@ def create_project(
     start_date: date = None,
     end_date: date = None,
     pm_id: int = None,
-    organization_id: int = None,
     department_id: int = None,
     client: str = None,
     budget: int = None,
@@ -157,7 +155,7 @@ def create_project(
         name=name, description=description, status=status,
         start_date=start_date, end_date=end_date,
         original_start_date=start_date, original_end_date=end_date,
-        pm_id=pm_id, organization_id=organization_id, department_id=department_id,
+        pm_id=pm_id, department_id=department_id,
         client=client, budget=budget, bid_deadline=bid_deadline,
         pipeline_stage=pipeline_stage, country=country, proposal_writer=proposal_writer,
         announcement_number=announcement_number,
@@ -228,7 +226,6 @@ def update_project(
     start_date: date = None,
     end_date: date = None,
     pm_id: int = None,
-    organization_id: int = None,
     department_id: int = None,
     client: str = None,
     budget: int = None,
@@ -296,7 +293,6 @@ def update_project(
         if project.original_end_date is None:
             project.original_end_date = end_date
     if pm_id: project.pm_id = pm_id
-    if organization_id is not None: project.organization_id = organization_id
     if department_id is not None:
         _validate_department(department_id, db)
         project.department_id = department_id

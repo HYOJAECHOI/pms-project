@@ -59,9 +59,11 @@ export default function ProjectCreate() {
   const [orgs, setOrgs] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
+  // URL의 ?org=N은 레거시 — ?dept=N과 동일하게 해석해서 department_id 기본값으로 사용.
   const orgParam = searchParams.get('org');
+  const deptParam = searchParams.get('dept');
   const sectionParam = searchParams.get('section');
-  const presetOrgId = orgParam ? Number(orgParam) : undefined;
+  const presetDeptId = (deptParam || orgParam) ? Number(deptParam || orgParam) : undefined;
   const presetStage = (sectionParam && SECTION_TO_STAGE[sectionParam]) || DEFAULT_STAGE;
   const presetStatus = (sectionParam && SECTION_TO_STATUS[sectionParam]) || '제안';
 
@@ -90,7 +92,7 @@ export default function ProjectCreate() {
     addStr('description', values.description || '');
     addStr('status', values.status);
     if (values.pipeline_stage) addStr('pipeline_stage', values.pipeline_stage);
-    if (values.organization_id != null) addStr('organization_id', values.organization_id);
+    if (values.department_id != null) addStr('department_id', values.department_id);
 
     // 기본
     addStr('client', values.client);
@@ -161,7 +163,7 @@ export default function ProjectCreate() {
         initialValues={{
           status: presetStatus,
           pipeline_stage: presetStage,
-          organization_id: presetOrgId,
+          department_id: presetDeptId,
           joint_performance: false,
           subcontract_allowed: false,
         }}
@@ -225,10 +227,17 @@ export default function ProjectCreate() {
               <Form.Item label="국가/지역" name="country" style={{ flex: 1, minWidth: 160 }}>
                 <Input placeholder="예: 대한민국" />
               </Form.Item>
-              <Form.Item label="소속 본부 (조직)" name="organization_id" style={{ flex: 1, minWidth: 200 }}>
+              <Form.Item
+                label="소속 본부"
+                name="department_id"
+                style={{ flex: 1, minWidth: 200 }}
+                extra="프로젝트를 수행할 본부"
+              >
                 <Select
-                  options={orgs.map((o) => ({ value: o.id, label: o.name }))}
-                  placeholder="선택"
+                  options={orgs
+                    .filter((o) => o.parent_id != null)
+                    .map((o) => ({ value: o.id, label: o.name }))}
+                  placeholder="프로젝트를 수행할 본부 선택"
                   allowClear
                 />
               </Form.Item>

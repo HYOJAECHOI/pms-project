@@ -166,6 +166,20 @@ export default function OrgManagement({ user }) {
     }
   };
 
+  // 본부장 지정/해제. 값이 null이면 clear_leader=true, 아니면 leader_id=값.
+  // 백엔드 검증: user.organization_id === selectedOrg.id여야 통과.
+  const handleSetLeader = async (leaderId) => {
+    if (!selectedOrg) return;
+    try {
+      const params = leaderId ? { leader_id: leaderId } : { clear_leader: true };
+      await api.put(`/organizations/${selectedOrg.id}`, null, { params });
+      message.success(leaderId ? '본부장을 지정했어요.' : '본부장을 해제했어요.');
+      load();
+    } catch (err) {
+      message.error(err?.response?.data?.detail || '본부장 변경에 실패했어요.');
+    }
+  };
+
   const titleRender = (node) => {
     const count = userCountByOrg[node.id] || 0;
     const hasChildren = (node.children || []).length > 0;
@@ -173,6 +187,9 @@ export default function OrgManagement({ user }) {
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
         <BankOutlined style={{ color: '#1677ff' }} />
         <Text strong>{node.name}</Text>
+        {node.leader_name && (
+          <Tag icon={<SafetyCertificateOutlined />} color="gold">본부장: {node.leader_name}</Tag>
+        )}
         <Tag icon={<TeamOutlined />} color="blue">{count}명</Tag>
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<PlusOutlined />} onClick={() => openCreate(node)}>하위 추가</Button>
@@ -243,9 +260,36 @@ export default function OrgManagement({ user }) {
           </Button>
         )}
       >
-        {!selectedOrg ? null : orgUsers.length === 0 ? (
-          <Empty description="소속 유저가 없어요." />
-        ) : (
+        {!selectedOrg ? null : (
+          <>
+            {/* 본부장 지정 */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f0f0f0',
+              }}
+            >
+              <SafetyCertificateOutlined style={{ color: '#faad14' }} />
+              <Text strong>본부장</Text>
+              <Select
+                style={{ minWidth: 200, flex: 1 }}
+                placeholder={orgUsers.length === 0 ? '소속 유저 필요' : '본부장 없음'}
+                value={selectedOrg.leader_id || undefined}
+                onChange={handleSetLeader}
+                allowClear
+                disabled={orgUsers.length === 0}
+                options={orgUsers.map((u) => ({
+                  value: u.id,
+                  label: `${u.name}${u.position ? ` · ${u.position}` : ''}`,
+                }))}
+              />
+            </div>
+            {orgUsers.length === 0 ? (
+              <Empty description="소속 유저가 없어요." />
+            ) : null}
+          </>
+        )}
+        {!selectedOrg ? null : orgUsers.length === 0 ? null : (
           <List
             dataSource={orgUsers}
             renderItem={(u) => (

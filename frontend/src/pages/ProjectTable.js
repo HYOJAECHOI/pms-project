@@ -140,6 +140,7 @@ const COL_META = [
   { key: 'no',              title: 'No',                width: 56,  fixed: true },
   { key: 'pipeline_stage',  title: '단계',              width: 150 },
   { key: 'client',          title: '발주기관',          width: 180 },
+  { key: 'department',      title: '본부',              width: 140 },
   { key: 'name',            title: '사업명',            width: 260 },
   { key: 'budget',          title: '사업금액(추정)',    width: 130 },
   { key: 'proposal_writer', title: '제안작성',          width: 110 },
@@ -257,6 +258,12 @@ export default function ProjectTable({ section, projects, user, onBack, onProjec
       onFilter: (v, r) => r.client === v,
       sorter: (a, b) => (a.client || '').localeCompare(b.client || ''),
       render: (c) => c || '-',
+    },
+    {
+      key: 'department', dataIndex: 'department_name',
+      title: wrapTitle('department', '본부'),
+      sorter: (a, b) => (a.department_name || '').localeCompare(b.department_name || ''),
+      render: (v) => v || '-',
     },
     {
       key: 'name', dataIndex: 'name',

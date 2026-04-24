@@ -52,7 +52,7 @@ export default function ProjectEdit() {
           name: res.data.name,
           description: res.data.description || '',
           status: res.data.status,
-          organization_id: res.data.organization_id ?? null,
+          department_id: res.data.department_id ?? null,
           pipeline_stage: res.data.pipeline_stage || DEFAULT_STAGE,
           client: res.data.client || '',
           country: res.data.country || '',
@@ -74,7 +74,7 @@ export default function ProjectEdit() {
     params.append('description', values.description || '');
     params.append('status', values.status);
     if (values.pipeline_stage) params.append('pipeline_stage', values.pipeline_stage);
-    if (values.organization_id != null) params.append('organization_id', values.organization_id);
+    if (values.department_id != null) params.append('department_id', values.department_id);
     if (values.client != null) params.append('client', values.client);
     if (values.country != null) params.append('country', values.country);
     if (values.budget != null && values.budget !== '') params.append('budget', values.budget);
@@ -153,10 +153,12 @@ export default function ProjectEdit() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="소속 본부 (조직)" name="organization_id" extra="임시팀이 소속된 본부를 선택하세요.">
+          <Form.Item label="소속 본부" name="department_id" extra="프로젝트를 수행할 본부">
             <Select
-              options={orgs.map((o) => ({ value: o.id, label: o.name }))}
-              placeholder="선택"
+              options={orgs
+                .filter((o) => o.parent_id != null)
+                .map((o) => ({ value: o.id, label: o.name }))}
+              placeholder="프로젝트를 수행할 본부 선택"
               allowClear
             />
           </Form.Item>

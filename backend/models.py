@@ -37,8 +37,7 @@ class Project(Base):
     original_start_date = Column(Date, nullable=True)  # 최초 계획 시작일 (불변)
     original_end_date   = Column(Date, nullable=True)  # 최초 계획 종료일 (불변)
     pm_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)  # 임시팀 소속 본부
-    department_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)   # 소속 본부 (행정상 귀속)
+    department_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)   # 소속 본부
     client = Column(String, nullable=True)  # 발주기관
     budget = Column(BigInteger, nullable=True)  # 사업금액 (원 단위)
     bid_deadline = Column(DateTime, nullable=True)  # 입찰마감일
