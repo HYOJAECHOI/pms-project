@@ -29,6 +29,23 @@ const todayISO = () => {
 };
 const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);
 
+// 상대시간: 방금 / N시간 전 / 어제 / N일 전 / N주 전 / M월 D일
+const relativeTime = (dateStr) => {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+  if (diff === 0) {
+    const hours = Math.floor((now - date) / (1000 * 60 * 60));
+    if (hours === 0) return '방금';
+    return `${hours}시간 전`;
+  }
+  if (diff === 1) return '어제';
+  if (diff < 7) return `${diff}일 전`;
+  if (diff < 30) return `${Math.floor(diff / 7)}주 전`;
+  return date.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
+};
+
 // D-N 태그: D-0 빨강 / D-1~3 주황 / D-4~7 노랑 / D+ 진한빨강
 const dDayInfo = (planEnd) => {
   if (!planEnd) return null;
@@ -43,7 +60,7 @@ const dDayInfo = (planEnd) => {
 const KANBAN_COLUMNS = [
   { key: '할일',     bg: '#fafafa', border: '#d9d9d9' },
   { key: '수행예정', bg: '#e6f4ff', border: '#91caff' },
-  { key: '종료',     bg: '#f6ffed', border: '#b7eb8f' },
+  { key: '수행완료', bg: '#f6ffed', border: '#b7eb8f' },
   { key: '완료보고', bg: '#fff7e6', border: '#ffd591' },
 ];
 
@@ -58,7 +75,7 @@ export default function MyTasks({ user }) {
   const [wbsDetailMembers, setWbsDetailMembers] = useState([]);
   const [wbsDetailTab, setWbsDetailTab] = useState('기본정보');
 
-  const [finishTarget, setFinishTarget] = useState(null); // 종료 이동 대기중인 plan
+  const [finishTarget, setFinishTarget] = useState(null); // 수행완료 이동 대기중인 plan
   const [finishMemo, setFinishMemo] = useState('');
 
   const [hoveredId, setHoveredId] = useState(null); // 프로젝트/완료 카드 hover
@@ -120,7 +137,7 @@ export default function MyTasks({ user }) {
 
   const refreshMyInstructions = useCallback(async () => {
     try {
-      const res = await api.get('/my-instructions');
+      const res = await api.get('/my-instructions', { params: { include_completed: true } });
       setMyInstructions(res.data || []);
     } catch {
       setMyInstructions([]);
@@ -147,8 +164,11 @@ export default function MyTasks({ user }) {
   }, [user, refreshMyWbs, refreshMyInstructions, fetchWorkPlans]);
 
   // ===== 파생 =====
+  // 자동 등록 대상: 백엔드 /my-instructions가 active로 간주하는 open/acknowledged/in_progress
   const activeInstructions = useMemo(
-    () => myInstructions.filter(i => ['open', 'acknowledged'].includes(i.status)),
+    () => myInstructions.filter(
+      i => ['open', 'acknowledged', 'in_progress'].includes(i.status) && i.wbs_id
+    ),
     [myInstructions]
   );
 
@@ -158,11 +178,12 @@ export default function MyTasks({ user }) {
     return m;
   }, [myWbs]);
 
+  // 카드 렌더용 맵: 상태 불문하고 포함 (completed/cancelled가 로컬 state에 남아있는 동안 카드 레이아웃 유지)
   const instructionByWbsId = useMemo(() => {
     const m = {};
-    activeInstructions.forEach(i => { if (i.wbs_id && !m[i.wbs_id]) m[i.wbs_id] = i; });
+    myInstructions.forEach(i => { if (i.wbs_id && !m[i.wbs_id]) m[i.wbs_id] = i; });
     return m;
-  }, [activeInstructions]);
+  }, [myInstructions]);
 
   // 내 참여 프로젝트: 내 WBS가 있거나 내가 PM인 프로젝트 (완료/종료 제외)
   const myProjectList = useMemo(() => {
@@ -198,7 +219,7 @@ export default function MyTasks({ user }) {
 
   // 컬럼별 분류 + 정렬 ('할일'은 skipped를 맨 아래로)
   const plansByColumn = useMemo(() => {
-    const map = { '할일': [], '수행예정': [], '종료': [], '완료보고': [] };
+    const map = { '할일': [], '수행예정': [], '수행완료': [], '완료보고': [] };
     workPlans.forEach(p => {
       const col = map[p.column] ? p.column : '할일';
       map[col].push(p);
@@ -216,34 +237,79 @@ export default function MyTasks({ user }) {
     return map;
   }, [workPlans]);
 
-  // ===== 자동 동기화: 미등록 WBS/지시사항을 '할일' 컬럼에 POST =====
+  // '할일' 컬럼 3섹션 분리: 지시사항 / 할일 / 오늘 안할 것(skipped)
+  // 각 섹션 내부는 D-day 빠른순 (plan_end_date 오름차순, 없으면 맨 뒤).
+  const todoSections = useMemo(() => {
+    const plans = plansByColumn['할일'] || [];
+    const skipped = plans.filter(p => p.status === 'skipped');
+    const active = plans.filter(p => p.status !== 'skipped');
+    const instructions = active.filter(p => instructionByWbsId[p.wbs_id]);
+    const todos = active.filter(p => !instructionByWbsId[p.wbs_id]);
+
+    const sorter = (a, b) => {
+      const aEnd = wbsById[a.wbs_id]?.plan_end_date;
+      const bEnd = wbsById[b.wbs_id]?.plan_end_date;
+      if (!aEnd && !bEnd) return (a.id || 0) - (b.id || 0);
+      if (!aEnd) return 1;
+      if (!bEnd) return -1;
+      return aEnd.localeCompare(bEnd);
+    };
+    instructions.sort(sorter);
+    todos.sort(sorter);
+    skipped.sort(sorter);
+    return { instructions, todos, skipped };
+  }, [plansByColumn, instructionByWbsId, wbsById]);
+
+  // ===== 자동 동기화: 미등록 WBS/지시사항을 '할일' 컬럼에 POST (초기 1회) =====
   useEffect(() => {
     if (!user?.id || loading || initialSyncRef.current) return;
-    const existing = new Set(workPlans.map(p => p.wbs_id));
-    const missing = [];
-    myWbs.forEach(w => {
-      if (w.status !== '완료' && !existing.has(w.id)) missing.push(w.id);
+
+    // eslint-disable-next-line no-console
+    console.log('auto-register check:', {
+      myWbs: myWbs.length,
+      myInstructions: myInstructions.length,
+      workPlans: workPlans.length,
+      instructionsWithWbs: myInstructions.filter(i => i.wbs_id).length,
     });
-    activeInstructions.forEach(i => {
-      if (i.wbs_id && !existing.has(i.wbs_id) && !missing.includes(i.wbs_id)) {
-        missing.push(i.wbs_id);
+
+    const missingWbsIds = new Set();
+
+    // WBS 자동 등록: 미완료이고 workPlans에 없는 것
+    myWbs
+      .filter(w => w.status !== '완료')
+      .forEach(w => {
+        if (!workPlans.some(p => p.wbs_id === w.id)) {
+          missingWbsIds.add(w.id);
+        }
+      });
+
+    // 지시사항 자동 등록: open/acknowledged이고 wbs_id가 있고 workPlans에 없는 것
+    activeInstructions.forEach(ins => {
+      if (!workPlans.some(p => p.wbs_id === ins.wbs_id)) {
+        missingWbsIds.add(ins.wbs_id);
       }
     });
 
-    initialSyncRef.current = true; // 첫 동기화 1회만
-    if (missing.length === 0) return;
+    // eslint-disable-next-line no-console
+    console.log('missing wbs_ids to register:', Array.from(missingWbsIds));
+
+    initialSyncRef.current = true; // 첫 동기화 1회만 (이후 재진입 방지)
+    if (missingWbsIds.size === 0) return;
 
     (async () => {
-      for (const wbs_id of missing) {
+      for (const wbsId of missingWbsIds) {
         try {
           await api.post('/work-plans', null, {
-            params: { wbs_id, plan_date: todayISO(), column: '할일' },
+            params: { wbs_id: wbsId, plan_date: todayISO(), column: '할일' },
           });
-        } catch { /* 중복/권한 에러 등 무시 */ }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn('auto-register failed:', wbsId, e.response?.data);
+        }
       }
       await fetchWorkPlans();
     })();
-  }, [user, loading, myWbs, activeInstructions, workPlans, fetchWorkPlans]);
+  }, [user, loading, myWbs, myInstructions, activeInstructions, workPlans, fetchWorkPlans]);
 
   // ===== 상호작용 핸들러 =====
   const openWbsDetailForItem = async (wbs, tab = '기본정보') => {
@@ -269,15 +335,75 @@ export default function MyTasks({ user }) {
     openWbsDetailForItem(wbsItem, ins ? '지시사항' : '기본정보');
   };
 
+  // 컬럼 이동 시 지시사항 receipt status 매핑.
+  // 완료보고는 WBS 전용이라 지시사항 이동 대상 아님 (handleDragEnd에서 차단).
+  const instructionStatusFor = (targetCol) => {
+    if (targetCol === '수행예정') return 'in_progress';
+    if (targetCol === '수행완료') return 'completed';
+    if (targetCol === '할일')     return 'acknowledged';
+    return null;
+  };
+
   // 성공 시 재조회까지 완료. 실패 시 에러를 throw — 호출측에서 처리.
   const moveToColumn = async (plan, targetCol, memo) => {
+    // 1) 지시사항 카드면 receipt status를 먼저 동기화
+    const instruction = instructionByWbsId[plan.wbs_id];
+    let newReceiptStatus = null;
+    if (instruction && user?.id) {
+      newReceiptStatus = instructionStatusFor(targetCol);
+      if (newReceiptStatus) {
+        const url = `/wbs/instructions/${instruction.instruction_id}/receipts/${user.id}`;
+        // eslint-disable-next-line no-console
+        console.log('[moveToColumn] receipt PUT', {
+          instruction,
+          url,
+          params: { status: newReceiptStatus },
+          userId: user.id,
+        });
+        try {
+          await api.put(url, null, { params: { status: newReceiptStatus } });
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[moveToColumn] receipt PUT failed', {
+            status: e.response?.status,
+            data: e.response?.data,
+            url,
+          });
+          throw e;
+        }
+      }
+    }
+
+    // 2) work_plan column 업데이트
     const params = { column: targetCol };
     if (memo !== undefined) params.memo = memo;
     // skipped 카드가 '할일' 외 컬럼으로 나가면 status 모순 제거
     if (plan.status === 'skipped' && targetCol !== '할일') {
       params.status = 'planned';
     }
-    await api.put(`/work-plans/${plan.id}`, null, { params });
+    try {
+      await api.put(`/work-plans/${plan.id}`, null, { params });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[moveToColumn] work_plan PUT failed', {
+        status: e.response?.status,
+        data: e.response?.data,
+        planId: plan.id,
+        params,
+      });
+      throw e;
+    }
+
+    // 3) work_plans 재조회 + 지시사항 상태 로컬 반영
+    //    백엔드에서 include_completed=true로 받으므로 refresh 호출해도 카드 유지 가능.
+    //    다만 로컬 patch를 먼저 적용해 UX 지연을 줄임.
+    if (instruction && newReceiptStatus) {
+      setMyInstructions(prev => prev.map(i =>
+        i.instruction_id === instruction.instruction_id
+          ? { ...i, status: newReceiptStatus }
+          : i
+      ));
+    }
     await fetchWorkPlans();
   };
 
@@ -298,9 +424,27 @@ export default function MyTasks({ user }) {
   };
 
   const handleCheckX = async (plan) => {
-    const nextStatus = plan.status === 'skipped' ? 'planned' : 'skipped';
+    const next = plan.status === 'skipped' ? 'planned' : 'skipped';
+    const instruction = instructionByWbsId[plan.wbs_id];
     try {
-      await api.put(`/work-plans/${plan.id}`, null, { params: { status: nextStatus } });
+      // 지시사항이면 receipt status도 맞춰서 work_plan status와 일관성 유지.
+      //  - skipped 처리 → receipt를 acknowledged로 (수행 중단 = '확인함'으로 되돌림)
+      //  - 복구 → 기존 receipt status 유지
+      if (instruction && user?.id) {
+        const receiptStatus = next === 'skipped' ? 'acknowledged' : instruction.status;
+        await api.put(
+          `/wbs/instructions/${instruction.instruction_id}/receipts/${user.id}`,
+          null,
+          { params: { status: receiptStatus } }
+        );
+        setMyInstructions(prev => prev.map(i =>
+          i.instruction_id === instruction.instruction_id
+            ? { ...i, status: receiptStatus }
+            : i
+        ));
+      }
+
+      await api.put(`/work-plans/${plan.id}`, null, { params: { status: next } });
       await fetchWorkPlans();
     } catch {
       message.error('상태 변경 실패');
@@ -315,7 +459,13 @@ export default function MyTasks({ user }) {
     const plan = workPlans.find(p => p.id === planId);
     if (!plan || !targetCol || plan.column === targetCol) return;
 
-    if (targetCol === '종료') {
+    // 지시사항은 '수행완료'가 종착점. 완료보고 컬럼으로는 이동 차단.
+    if (targetCol === '완료보고' && instructionByWbsId[plan.wbs_id]) {
+      message.info('지시사항은 수행완료로 끝납니다');
+      return;
+    }
+
+    if (targetCol === '수행완료') {
       setFinishTarget(plan);
       setFinishMemo(plan.memo || '');
       return;
@@ -327,7 +477,7 @@ export default function MyTasks({ user }) {
     if (!finishTarget) return;
     const memo = finishMemo.trim();
     try {
-      await moveToColumn(finishTarget, '종료', memo || undefined);
+      await moveToColumn(finishTarget, '수행완료', memo || undefined);
       setFinishTarget(null);
       setFinishMemo('');
     } catch {
@@ -392,6 +542,7 @@ export default function MyTasks({ user }) {
               key={col.key}
               col={col}
               plans={plansByColumn[col.key] || []}
+              todoSections={col.key === '할일' ? todoSections : null}
               wbsById={wbsById}
               instructionByWbsId={instructionByWbsId}
               getDisplayStatus={getDisplayStatus}
@@ -516,18 +667,18 @@ export default function MyTasks({ user }) {
         />
       )}
 
-      {/* 종료 이동 메모 Modal */}
+      {/* 수행완료 이동 메모 Modal */}
       <Modal
-        title="종료 처리"
+        title="수행완료 처리"
         open={!!finishTarget}
         onOk={handleFinishOk}
         onCancel={handleFinishCancel}
-        okText="종료"
+        okText="수행완료"
         cancelText="취소"
       >
         <div style={{ marginBottom: 8 }}>
           <Text type="secondary">
-            "{finishTarget?.wbs_title}" 작업을 '종료' 컬럼으로 옮깁니다. 마무리 메모는 선택입니다.
+            "{finishTarget?.wbs_title}" 작업을 '수행완료' 컬럼으로 옮깁니다. 마무리 메모는 선택입니다.
           </Text>
         </div>
         <Input.TextArea
@@ -555,10 +706,52 @@ export default function MyTasks({ user }) {
 
 // ===== 칸반 컬럼 =====
 function KanbanColumn({
-  col, plans, wbsById, instructionByWbsId, getDisplayStatus,
+  col, plans, todoSections, wbsById, instructionByWbsId, getDisplayStatus,
   onOpenDetail, onCheckV, onCheckX, onMoveToReport, loading,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${col.key}` });
+
+  const renderCard = (plan) => (
+    <KanbanCard
+      key={plan.id}
+      plan={plan}
+      wbs={wbsById[plan.wbs_id]}
+      instruction={instructionByWbsId[plan.wbs_id]}
+      columnKey={col.key}
+      getDisplayStatus={getDisplayStatus}
+      onOpenDetail={onOpenDetail}
+      onCheckV={onCheckV}
+      onCheckX={onCheckX}
+      onMoveToReport={onMoveToReport}
+    />
+  );
+
+  // 할일 컬럼: 지시사항 / 할일 / 오늘 안할 것 3섹션 Collapse
+  const isTodoColumn = col.key === '할일' && todoSections;
+  const collapseItems = isTodoColumn ? [
+    {
+      key: 'instructions',
+      label: <span>📬 지시사항 ({todoSections.instructions.length})</span>,
+      children: todoSections.instructions.length === 0
+        ? <Text type="secondary" style={{ fontSize: 12 }}>없음</Text>
+        : <div>{todoSections.instructions.map(renderCard)}</div>,
+    },
+    {
+      key: 'todos',
+      label: <span>📋 할일 ({todoSections.todos.length})</span>,
+      children: todoSections.todos.length === 0
+        ? <Text type="secondary" style={{ fontSize: 12 }}>없음</Text>
+        : <div>{todoSections.todos.map(renderCard)}</div>,
+    },
+    {
+      key: 'skipped',
+      label: <span>💤 오늘 안할 것 ({todoSections.skipped.length})</span>,
+      children: todoSections.skipped.length === 0
+        ? <Text type="secondary" style={{ fontSize: 12 }}>없음</Text>
+        : <div>{todoSections.skipped.map(renderCard)}</div>,
+    },
+  ] : null;
+
   return (
     <div
       ref={setNodeRef}
@@ -581,26 +774,23 @@ function KanbanColumn({
         <Badge count={plans.length} showZero style={{ backgroundColor: '#8c8c8c' }} />
       </div>
 
-      {plans.length === 0 && !loading && (
-        <div style={{ padding: 16, textAlign: 'center' }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>비어있어요</Text>
-        </div>
-      )}
-
-      {plans.map(plan => (
-        <KanbanCard
-          key={plan.id}
-          plan={plan}
-          wbs={wbsById[plan.wbs_id]}
-          instruction={instructionByWbsId[plan.wbs_id]}
-          columnKey={col.key}
-          getDisplayStatus={getDisplayStatus}
-          onOpenDetail={onOpenDetail}
-          onCheckV={onCheckV}
-          onCheckX={onCheckX}
-          onMoveToReport={onMoveToReport}
+      {isTodoColumn ? (
+        <Collapse
+          defaultActiveKey={['instructions', 'todos']}
+          ghost
+          size="small"
+          items={collapseItems}
         />
-      ))}
+      ) : (
+        <>
+          {plans.length === 0 && !loading && (
+            <div style={{ padding: 16, textAlign: 'center' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>비어있어요</Text>
+            </div>
+          )}
+          {plans.map(renderCard)}
+        </>
+      )}
     </div>
   );
 }
@@ -621,16 +811,30 @@ function KanbanCard({
   const dday = wbs ? dDayInfo(wbs.plan_end_date) : null;
   const ds = wbs ? getDisplayStatus(wbs) : null;
   const isSkipped = plan.status === 'skipped';
-  const icon = instruction ? '📬' : '📋';
+  const isInstruction = !!instruction;
+  const isInstructionDone = isInstruction && columnKey === '수행완료';
 
   const cardStyle = {
     marginBottom: 8,
     cursor: 'grab',
     backgroundColor: isSkipped ? '#f5f5f5' : '#fff',
     opacity: isSkipped ? 0.6 : 1,
+    border: isInstructionDone ? '1.5px solid #52c41a' : undefined,
   };
 
   const stop = (e) => e.stopPropagation();
+
+  // 지시사항 receipt status → 라벨 + 색상
+  const RECEIPT_STATUS_META = {
+    open:          { label: '확인하기', color: 'red' },
+    acknowledged:  { label: '확인함',   color: 'blue' },
+    in_progress:   { label: '진행중',   color: 'orange' },
+    completed:     { label: '완료',     color: 'green' },
+    cancelled:     { label: '취소',     color: 'default' },
+  };
+  const receiptMeta = isInstruction
+    ? (RECEIPT_STATUS_META[instruction.status] || { label: instruction.status, color: 'default' })
+    : null;
 
   return (
     <div ref={setNodeRef} style={dragStyle} {...attributes} {...listeners}>
@@ -639,46 +843,91 @@ function KanbanCard({
         style={cardStyle}
         onClick={() => onOpenDetail(plan)}
       >
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-          <span style={{ fontSize: 14, lineHeight: '20px' }}>{icon}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontWeight: 600, fontSize: 13,
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                color: isSkipped ? '#bbb' : undefined,
-                textDecoration: isSkipped ? 'line-through' : 'none',
-              }}
-              title={plan.wbs_title}
-            >
-              {plan.wbs_title}
+        {isInstruction ? (
+          // ===== 지시사항 카드 =====
+          <>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+              <span style={{ fontSize: 14, lineHeight: '20px' }}>📬</span>
+              <div
+                style={{
+                  flex: 1, minWidth: 0,
+                  fontWeight: 600, fontSize: 14, lineHeight: 1.35,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                  wordBreak: 'break-word',
+                  color: isSkipped ? '#bbb' : undefined,
+                  textDecoration: isSkipped ? 'line-through' : 'none',
+                }}
+                title={instruction.title}
+              >
+                {instruction.title}
+              </div>
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <Tag color={receiptMeta.color} style={{ fontSize: 11, margin: 0 }}>
+                {receiptMeta.label}
+              </Tag>
             </div>
             <div
               style={{
-                fontSize: 11, color: '#888',
+                marginTop: 6, fontSize: 11, color: '#888',
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               }}
-              title={plan.project_name}
+              title={`${instruction.project_name || ''} / ${instruction.wbs_title || ''}`}
             >
-              {plan.project_name}
+              {instruction.project_name}
+              {instruction.wbs_title ? ` / ${instruction.wbs_title}` : ''}
             </div>
-            <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {dday && (
-                <Tag
-                  style={{
-                    color: dday.color, background: dday.background,
-                    borderColor: dday.color, fontSize: 11, margin: 0,
-                  }}
-                >
-                  {dday.text}
-                </Tag>
-              )}
-              {ds && (
-                <Tag color={ds.color} style={{ fontSize: 11, margin: 0 }}>{ds.text}</Tag>
-              )}
+            <div style={{ marginTop: 2, fontSize: 11, color: '#999' }}>
+              {instruction.author_name ? `${instruction.author_name} · ` : ''}
+              {relativeTime(instruction.created_at)}
+            </div>
+          </>
+        ) : (
+          // ===== WBS 카드 (기존 방식) =====
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+            <span style={{ fontSize: 14, lineHeight: '20px' }}>📋</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontWeight: 600, fontSize: 13,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  color: isSkipped ? '#bbb' : undefined,
+                  textDecoration: isSkipped ? 'line-through' : 'none',
+                }}
+                title={plan.wbs_title}
+              >
+                {plan.wbs_title}
+              </div>
+              <div
+                style={{
+                  fontSize: 11, color: '#888',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+                title={plan.project_name}
+              >
+                {plan.project_name}
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {dday && (
+                  <Tag
+                    style={{
+                      color: dday.color, background: dday.background,
+                      borderColor: dday.color, fontSize: 11, margin: 0,
+                    }}
+                  >
+                    {dday.text}
+                  </Tag>
+                )}
+                {ds && (
+                  <Tag color={ds.color} style={{ fontSize: 11, margin: 0 }}>{ds.text}</Tag>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {columnKey === '할일' && (
           <div
@@ -702,7 +951,7 @@ function KanbanCard({
           </div>
         )}
 
-        {columnKey === '종료' && (
+        {columnKey === '수행완료' && !isInstruction && (
           <div
             style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end', gap: 6 }}
             onClick={stop}

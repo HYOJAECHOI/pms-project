@@ -176,20 +176,28 @@ def create_instruction(
 
 
 @router.get("/my-instructions")
-def list_my_instructions(request: Request, db: Session = Depends(get_db)):
+def list_my_instructions(
+    request: Request,
+    include_completed: bool = False,
+    db: Session = Depends(get_db),
+):
     """
-    로그인 유저가 수신자로 지정된 활성 지시(open/acknowledged/in_progress) 목록.
+    로그인 유저가 수신자로 지정된 지시 목록.
+    기본: 활성 상태(open/acknowledged/in_progress).
+    include_completed=True: completed도 포함 (칸반의 수행완료 컬럼 유지용).
     유저 id는 토큰에서 추출 (쿼리 파라미터로 받지 않음 — 다른 유저 조회 방지).
     """
     user_id = extract_user_id(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="인증이 필요해요.")
-    active_statuses = ["open", "acknowledged", "in_progress"]
+    allowed_statuses = ["open", "acknowledged", "in_progress"]
+    if include_completed:
+        allowed_statuses.append("completed")
     receipts = (
         db.query(models.WBSInstructionReceipt)
         .filter(
             models.WBSInstructionReceipt.target_user_id == user_id,
-            models.WBSInstructionReceipt.status.in_(active_statuses),
+            models.WBSInstructionReceipt.status.in_(allowed_statuses),
         )
         .all()
     )

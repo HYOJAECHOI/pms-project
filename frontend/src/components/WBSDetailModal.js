@@ -4,8 +4,9 @@ import {
   Timeline, Space, Spin, message, Empty, Divider, List, Alert, Popconfirm,
 } from 'antd';
 import {
-  DeleteOutlined, DownloadOutlined, FileOutlined, UploadOutlined,
+  DeleteOutlined, DownloadOutlined, FileOutlined, UploadOutlined, UnorderedListOutlined,
 } from '@ant-design/icons';
+import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../api/axios';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -118,6 +119,8 @@ export default function WBSDetailModal({
   onClose, onUpdate, defaultTab = '기본정보',
 }) {
   const wbsId = wbsItem?.id;
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [loading, setLoading] = useState(false);
@@ -597,7 +600,24 @@ export default function WBSDetailModal({
           {project?.name && <span style={{ fontSize: 11, color: '#888' }}>· {project.name}</span>}
         </Space>
       }
-      footer={null}
+      footer={[
+        <Button
+          key="gantt"
+          icon={<BarChartOutlined />}
+          disabled={!(project?.id || displayItem?.project_id)}
+          onClick={() => {
+            const projectId = project?.id || displayItem?.project_id;
+            if (!projectId) return;
+            navigate(`/projects/${projectId}`, {
+              state: { tab: 'wbs', focusWbsId: displayItem?.id, from: location.pathname },
+            });
+            onClose();
+          }}
+        >
+          간트차트에서 보기
+        </Button>,
+        <Button key="close" onClick={onClose}>닫기</Button>,
+      ]}
       width={800}
       destroyOnClose
     >

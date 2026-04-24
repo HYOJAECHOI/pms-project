@@ -10,7 +10,7 @@ from routers.dependencies import require_project_member
 router = APIRouter()
 
 STATUSES = {"planned", "done", "skipped"}
-COLUMNS = {"할일", "수행예정", "종료", "완료보고"}
+COLUMNS = {"할일", "수행예정", "수행완료", "완료보고"}
 
 
 def _parse_date(value) -> date_cls:
