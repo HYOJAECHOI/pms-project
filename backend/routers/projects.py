@@ -19,6 +19,25 @@ def _iso(v):
     return v.isoformat() if v else None
 
 
+def _validate_department(department_id: int, db: Session):
+    """department_id 조직이 존재하고 '본부'(= parent_id 있는 하위 조직)인지 검증.
+    최상위(회사) 혹은 임시팀(project_id 있음)은 본부로 허용하지 않음.
+    department_id가 None이면 검증 스킵.
+    """
+    if department_id is None:
+        return
+    org = db.query(models.Organization).filter(
+        models.Organization.id == department_id
+    ).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="지정한 본부를 찾을 수 없어요.")
+    if org.parent_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="최상위 조직(회사)은 본부로 지정할 수 없어요.",
+        )
+
+
 def _serialize_project(p, db):
     pm_name = None
     if p.pm_id:
@@ -28,6 +47,10 @@ def _serialize_project(p, db):
     if p.organization_id:
         org = db.query(models.Organization).filter(models.Organization.id == p.organization_id).first()
         organization_name = org.name if org else None
+    department_name = None
+    if p.department_id:
+        dept = db.query(models.Organization).filter(models.Organization.id == p.department_id).first()
+        department_name = dept.name if dept else None
     return {
         "id": p.id,
         "name": p.name,
@@ -41,6 +64,8 @@ def _serialize_project(p, db):
         "pm_name": pm_name,
         "organization_id": p.organization_id,
         "organization_name": organization_name,
+        "department_id": p.department_id,
+        "department_name": department_name,
         "client": p.client,
         "budget": p.budget,
         "bid_deadline": _iso(p.bid_deadline),
@@ -89,6 +114,7 @@ def create_project(
     end_date: date = None,
     pm_id: int = None,
     organization_id: int = None,
+    department_id: int = None,
     client: str = None,
     budget: int = None,
     bid_deadline: datetime = None,
@@ -126,11 +152,12 @@ def create_project(
     announcement_url: str = None,
     db: Session = Depends(get_db),
 ):
+    _validate_department(department_id, db)
     project = models.Project(
         name=name, description=description, status=status,
         start_date=start_date, end_date=end_date,
         original_start_date=start_date, original_end_date=end_date,
-        pm_id=pm_id, organization_id=organization_id,
+        pm_id=pm_id, organization_id=organization_id, department_id=department_id,
         client=client, budget=budget, bid_deadline=bid_deadline,
         pipeline_stage=pipeline_stage, country=country, proposal_writer=proposal_writer,
         announcement_number=announcement_number,
@@ -165,8 +192,15 @@ def create_project(
 
 # 프로젝트 목록 조회
 @router.get("/projects")
-def get_projects(db: Session = Depends(get_db)):
-    projects = db.query(models.Project).all()
+def get_projects(
+    department_id: int = None,
+    db: Session = Depends(get_db),
+):
+    """department_id 쿼리 파라미터를 주면 해당 본부 프로젝트만 필터."""
+    q = db.query(models.Project)
+    if department_id is not None:
+        q = q.filter(models.Project.department_id == department_id)
+    projects = q.all()
     return [_serialize_project(p, db) for p in projects]
 
 # 프로젝트 단건 조회
@@ -195,6 +229,7 @@ def update_project(
     end_date: date = None,
     pm_id: int = None,
     organization_id: int = None,
+    department_id: int = None,
     client: str = None,
     budget: int = None,
     bid_deadline: datetime = None,
@@ -262,6 +297,9 @@ def update_project(
             project.original_end_date = end_date
     if pm_id: project.pm_id = pm_id
     if organization_id is not None: project.organization_id = organization_id
+    if department_id is not None:
+        _validate_department(department_id, db)
+        project.department_id = department_id
     if client is not None: project.client = client
     if budget is not None: project.budget = budget
     if bid_deadline is not None: project.bid_deadline = bid_deadline

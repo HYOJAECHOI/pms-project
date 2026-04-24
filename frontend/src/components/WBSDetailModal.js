@@ -602,8 +602,8 @@ export default function WBSDetailModal({
       }
       footer={[
         <Button
-          key="gantt"
-          icon={<BarChartOutlined />}
+          key="wbs-tab"
+          icon={<UnorderedListOutlined />}
           disabled={!(project?.id || displayItem?.project_id)}
           onClick={() => {
             const projectId = project?.id || displayItem?.project_id;
@@ -614,7 +614,7 @@ export default function WBSDetailModal({
             onClose();
           }}
         >
-          간트차트에서 보기
+          WBS 탭에서 보기
         </Button>,
         <Button key="close" onClick={onClose}>닫기</Button>,
       ]}
