@@ -70,6 +70,7 @@ export default function AppLayout({ user, onLogout, children }) {
     { key: '/projects', icon: <UnorderedListOutlined />, label: '프로젝트' },
     { key: '/my-tasks', icon: <CheckCircleOutlined />, label: '내 업무' },
     { key: '/stats', icon: <BarChartOutlined />, label: '통계' },
+    { key: '/resources', icon: <TeamOutlined />, label: '인력 운용' },
     ...(user?.role === 'admin'
       ? [
           { key: '/users', icon: <TeamOutlined />, label: '유저 관리' },

@@ -14,6 +14,7 @@ import MyTasks from './pages/MyTasks';
 import Stats from './pages/Stats';
 import UserManagement from './pages/UserManagement';
 import OrgManagement from './pages/OrgManagement';
+import ResourceAllocation from './pages/ResourceAllocation';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/stats" element={<Stats />} />
           <Route path="/users" element={<UserManagement user={user} />} />
           <Route path="/org-management" element={<OrgManagement user={user} />} />
+          <Route path="/resources" element={<ResourceAllocation user={user} />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </AppLayout>
